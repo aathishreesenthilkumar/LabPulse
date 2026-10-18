@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LabPulse Monitor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #0b1220; color: #e2e8f0; font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+      .wrap { min-height: 100%; display: grid; grid-template-rows: auto 1fr auto; padding: 3vmin 4vmin; gap: 2vmin; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 2vmin; }
+      .brand { display: flex; align-items: center; gap: 1.5vmin; }
+      .logo { width: 6vmin; height: 6vmin; border-radius: 1.4vmin; background: #0f766e; display: grid; place-items: center; font-weight: 900; font-size: 3.4vmin; color: #fff; }
+      .lab { font-size: 4vmin; font-weight: 800; }
+      .sub { font-size: 2vmin; color: #94a3b8; }
+      .status { display: flex; align-items: center; gap: 1vmin; font-size: 2.4vmin; font-weight: 700; padding: 0.8vmin 2vmin; border-radius: 99px; }
+      .status::before { content: ''; width: 1.6vmin; height: 1.6vmin; border-radius: 99px; background: currentColor; }
+      .online { background: #052e2b; color: #5eead4; }
+      .offline { background: #3f1d1d; color: #fca5a5; }
+      main { display: grid; grid-template-columns: auto minmax(0, 22rem); align-items: center; justify-content: center; gap: 6vmin; }
+      .qrbox { position: relative; background: #fff; padding: 3vmin; border-radius: 3vmin; box-shadow: 0 0 0 1vmin rgba(94, 234, 212, 0.15); }
+      #qr { width: 62vmin; height: 62vmin; }
+      #qr img, #qr canvas { width: 100% !important; height: 100% !important; image-rendering: pixelated; }
+      .veil { position: absolute; inset: 0; border-radius: 3vmin; background: rgba(11, 18, 32, 0.92); display: none; place-items: center; text-align: center; padding: 4vmin; font-size: 3.2vmin; font-weight: 700; color: #fca5a5; }
+      .side { display: flex; flex-direction: column; gap: 4vmin; }
+      .stat .label { font-size: 2.2vmin; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+      .stat .value { font-size: 12vmin; font-weight: 900; line-height: 1; color: #f8fafc; }
+      .ring { display: flex; align-items: center; gap: 2vmin; font-size: 2.4vmin; color: #94a3b8; }
+      .ring svg { width: 9vmin; height: 9vmin; transform: rotate(-90deg); }
+      .ring circle { fill: none; stroke-width: 10; }
+      .steps { font-size: 2.3vmin; color: #cbd5e1; line-height: 1.6; margin: 0; padding-left: 3vmin; }
+      footer { text-align: center; font-size: 1.8vmin; color: #64748b; }
+      @media (orientation: portrait) {
+        main { grid-template-columns: 1fr; justify-items: center; }
+        #qr { width: 78vmin; height: 78vmin; }
+        .side { flex-direction: row; flex-wrap: wrap; justify-content: center; text-align: center; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="brand">
+          <div class="logo">L</div>
+          <div>
+            <div class="lab" id="lab-name">LabPulse</div>
+            <div class="sub">Scan to check in · LabPulse</div>
+          </div>
+        </div>
+        <div id="conn" class="status offline">Connecting…</div>
+      </header>
+      <main>
+        <div class="qrbox">
+          <div id="qr" aria-label="Check-in QR code"></div>
+          <div class="veil" id="veil"></div>
+        </div>
+        <div class="side">
+          <div class="stat">
+            <div class="label">Inside now</div>
+            <div class="value" id="occ">–</div>
+            <div class="sub" id="occ-pending"></div>
+          </div>
+          <div class="ring">
+            <svg viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="44" stroke="#1e293b"></circle>
+              <circle id="arc" cx="50" cy="50" r="44" stroke="#5eead4" stroke-linecap="round" stroke-dasharray="276.46" stroke-dashoffset="0"></circle>
+            </svg>
+            <span id="ring-text">New code in a few seconds</span>
+          </div>
+          <ol class="steps">
+            <li>Open your phone camera</li>
+            <li>Scan the code, tap the link</li>
+            <li>Allow location, choose a reason</li>
+          </ol>
+        </div>
+      </main>
+      <footer>Each code works once and changes every few seconds. Photos of it will not work.</footer>
+    </div>
+    <script>
+      window.BOOT = <?!= bootJson ?>;
+    </script>
+    <script>
+      (function () {
+        'use strict';
+        var BOOT = window.BOOT || {};
+        var veil = document.getElementById('veil');
+        var conn = document.getElementById('conn');
+        var arc = document.getElementById('arc');
+        var CIRC = 276.46;
+
+        function showVeil(text) {
+          veil.textContent = text;
+          veil.style.display = 'grid';
+        }
+        function hideVeil() { veil.style.display = 'none'; }
+
+        if (BOOT.error || !BOOT.lab) {
+          document.getElementById('lab-name').textContent = 'LabPulse Monitor';
+          showVeil((BOOT.error && BOOT.error.message) || 'This monitor is not configured.');
+          conn.textContent = 'Offline';
+          return;
+        }
+
+        var lab = BOOT.lab;
+        var pollMs = Math.max(1000, Math.min(5000, (BOOT.init && BOOT.init.monitorPollMs) || 1500));
+        document.getElementById('lab-name').textContent = lab.name;
+        var qr = typeof QRCode === 'function' ? new QRCode(document.getElementById('qr'), { width: 512, height: 512, correctLevel: QRCode.CorrectLevel.M }) : null;
+        var shown = null;
+        var lastOk = 0;
+        var deadline = 0;
+        var rotateMs = lab.qr_rotate_sec * 1000;
+        var inflight = false;
+        var closed = false;
+
+        function setOnline(ok) {
+          conn.className = 'status ' + (ok ? 'online' : 'offline');
+          conn.textContent = ok ? 'Online' : 'Offline';
+        }
+
+        function tick() {
+          if (inflight) return;
+          inflight = true;
+          google.script.run
+            .withSuccessHandler(function (r) {
+              inflight = false;
+              if (!r || !r.ok) {
+                setOnline(false);
+                return showVeil((r && r.message) || 'Monitor error');
+              }
+              var d = r.data;
+              lastOk = Date.now();
+              setOnline(true);
+              document.getElementById('occ').textContent = d.occupancy;
+              document.getElementById('occ-pending').textContent = d.pending ? '+' + d.pending + ' awaiting review' : '';
+              if (!d.open) {
+                closed = true;
+                shown = null;
+                if (qr) qr.clear();
+                showVeil('Lab closed. Open ' + d.hours + ' (' + d.days.replace(/,/g, ' ') + ')');
+                return;
+              }
+              closed = false;
+              rotateMs = d.rotateSec * 1000;
+              deadline = Date.now() + d.msLeft;
+              if (d.token !== shown) {
+                shown = d.token;
+                // The link opens LabPulse directly; the token inside is signed and single-use.
+                var url = BOOT.webAppUrl + '?t=' + encodeURIComponent(d.token);
+                if (qr) qr.makeCode(url);
+              }
+              if (!qr) return showVeil('QR library failed to load. Check the network.');
+              hideVeil();
+            })
+            .withFailureHandler(function () {
+              inflight = false;
+              setOnline(false);
+            })
+            .api('monitorTick', { labId: lab.lab_id });
+        }
+
+        function frame() {
+          var now = Date.now();
+          // No silent attendance: if we lose the server, hide the code instead of showing a stale one.
+          if (!closed && lastOk && now - lastOk > Math.max(6000, pollMs * 4)) {
+            setOnline(false);
+            if (qr) qr.clear();
+            shown = null;
+            showVeil('Offline — check-in paused. Ask lab staff for a manual entry.');
+          }
+          var left = Math.max(0, deadline - now);
+          arc.setAttribute('stroke-dashoffset', String(CIRC * (1 - left / rotateMs)));
+          document.getElementById('ring-text').textContent = closed ? 'Paused while the lab is closed' : 'New code in ' + Math.ceil(left / 1000) + ' s';
+          requestAnimationFrame(frame);
+        }
+
+        tick();
+        setInterval(function () {
+          // Outside operating hours, poll slowly: the monitor only needs to notice opening time (§4.4 quota note).
+          if (closed && Date.now() - lastOk < 60000) return;
+          tick();
+        }, pollMs);
+        requestAnimationFrame(frame);
+      })();
+    </script>
+  </body>
+</html>

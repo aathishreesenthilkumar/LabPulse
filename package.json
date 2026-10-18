@@ -1,0 +1,20 @@
+{
+  "name": "labpulse",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LabPulse — real-time lab monitoring, geofenced attendance and asset booking on Google Apps Script",
+  "scripts": {
+    "test": "node tests/run.js && node tests/ui-smoke.js",
+    "test:server": "node tests/run.js",
+    "test:ui": "node tests/ui-smoke.js",
+    "login": "clasp login",
+    "push": "clasp push",
+    "deploy": "clasp push && clasp deploy --description \"LabPulse\"",
+    "open": "clasp open",
+    "preview": "node dev/preview.js"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2",
+    "jsdom": "^24.1.3"
+  }
+}

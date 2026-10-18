@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LabPulse</title>
+    <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+    <?!= include_('Styles'); ?>
+  </head>
+  <body class="bg-slate-100 text-slate-900 antialiased">
+    <div id="app">
+      <div class="min-h-screen grid place-items-center text-slate-500">Loading LabPulse…</div>
+    </div>
+    <div id="modal-root"></div>
+    <div id="toast-root" class="fixed bottom-4 inset-x-0 flex flex-col items-center gap-2 px-4 z-50 pointer-events-none"></div>
+    <script>
+      window.BOOT = <?!= bootJson ?>;
+    </script>
+    <?!= include_('Client'); ?>
+  </body>
+</html>

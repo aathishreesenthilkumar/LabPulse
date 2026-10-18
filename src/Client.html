@@ -1,0 +1,1303 @@
+<script>
+  /**
+   * LabPulse single-page client. The browser only displays data and reports what the phone
+   * observed; every decision is made on the server (SRS §3.2).
+   */
+  (function () {
+    'use strict';
+
+    var BOOT = window.BOOT || {};
+    var S = {
+      init: BOOT.init || null,
+      lab: null,
+      tab: null,
+      status: null,
+      occ: null,
+      checkin: null,
+      sections: {},
+      active: [],
+      roster: { sessionId: null, date: null },
+      report: { kind: 'daily' }
+    };
+
+    /* ================= helpers ================= */
+
+    function esc(s) {
+      return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+    function can(a) { return !!(S.init && S.init.allowed.indexOf(a) !== -1); }
+    function role() { return S.init && S.init.me ? S.init.me.role : null; }
+    function rid() {
+      return window.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+    }
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    var TZ = { timeZone: 'Asia/Kolkata' };
+    function fmtTime(iso) { return iso ? new Date(iso).toLocaleTimeString('en-IN', Object.assign({ hour: '2-digit', minute: '2-digit' }, TZ)) : ''; }
+    function fmtDT(iso) { return iso ? new Date(iso).toLocaleString('en-IN', Object.assign({ day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }, TZ)) : ''; }
+    function dur(ms) {
+      var m = Math.max(0, Math.floor(ms / 60000));
+      return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm';
+    }
+    function todayKey() { return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10); }
+    function monthKey() { return todayKey().slice(0, 7); }
+    function toLocalInput(iso) {
+      var d = new Date(new Date(iso).getTime() + 330 * 60000);
+      return d.toISOString().slice(0, 16);
+    }
+    function fromLocalInput(v) { return v ? new Date(v + ':00+05:30').toISOString() : ''; }
+
+    /** google.script.run as a promise. Server replies {ok, data} or {ok:false, code, message}. */
+    function call(action, payload) {
+      return new Promise(function (resolve, reject) {
+        google.script.run
+          .withSuccessHandler(function (r) {
+            if (r && r.ok) resolve(r.data);
+            else reject(r || { code: 'SERVER', message: 'Unexpected response from the server.' });
+          })
+          .withFailureHandler(function (e) {
+            reject({ code: 'NETWORK', message: (e && e.message) || 'Network problem. Check your connection.' });
+          })
+          .api(action, payload || {});
+      });
+    }
+
+    function toast(msg, kind) {
+      var root = document.getElementById('toast-root');
+      var el = document.createElement('div');
+      var cls = kind === 'error' ? 'bg-red-700' : kind === 'warn' ? 'bg-amber-600' : 'bg-slate-900';
+      el.className = cls + ' text-white text-sm px-4 py-2.5 rounded-lg shadow-lg max-w-md pointer-events-auto';
+      el.textContent = msg;
+      root.appendChild(el);
+      setTimeout(function () { el.remove(); }, kind === 'error' ? 6000 : 3500);
+    }
+
+    function badge(color, text) { return '<span class="lp-badge lp-' + color + '">' + esc(text) + '</span>'; }
+
+    /** Status colours are always paired with a word (NFR ease of use). */
+    function visitBadge(v) {
+      if (!v) return '';
+      if (v.status === 'VOIDED' || v.review_status === 'DECLINED') return badge('red', 'Declined');
+      if (v.review_status === 'PENDING') return badge('amber', 'Pending review');
+      if (v.confidence === 'MANUAL') return badge('blue', 'Manual entry');
+      if (v.review_status === 'CONFIRMED') return badge('green', 'Confirmed');
+      if (v.confidence === 'GREEN') return badge('green', 'Verified');
+      return badge('gray', v.confidence || '—');
+    }
+    function assetBadge(s) {
+      var m = { AVAILABLE: ['green', 'Available'], RESERVED: ['amber', 'Reserved'], ISSUED: ['blue', 'Issued'], UNAVAILABLE: ['gray', 'Unavailable'], MAINTENANCE: ['gray', 'Maintenance'], RETIRED: ['gray', 'Retired'] }[s] || ['gray', s];
+      return badge(m[0], m[1]);
+    }
+    function closeLabel(t) {
+      return { MANUAL: 'Checked out', AUTO_DURATION: 'Auto-closed (session ended)', AUTO_CLOSING: 'Auto-closed (lab closed)', AUTO_SWITCH: 'Closed (moved to another lab)', STAFF: 'Closed by staff', VOIDED: 'Voided' }[t] || '';
+    }
+    function entryLabel(t) { return { COURSE: 'Lab course', EVENT: 'Event / workshop', RESEARCH: 'Individual research' }[t] || t; }
+
+    function errorBox(e) {
+      var denied = e && (e.code === 'FORBIDDEN' || e.code === 'NOT_REGISTERED' || e.code === 'INACTIVE');
+      return '<div class="rounded-lg p-3 text-sm ' + (denied ? 'bg-slate-50 text-slate-600' : 'bg-red-50 text-red-800') + '">' +
+        (denied ? '<b>Not available for your role.</b> ' : '<b>Could not load.</b> ') + esc(e && e.message) +
+        (denied ? '' : ' <button class="underline ml-1" data-act="reload-sections">Retry</button>') + '</div>';
+    }
+    function empty(text) { return '<p class="text-sm text-slate-500 py-3">' + esc(text) + '</p>'; }
+    function skeleton(h) { return '<div class="lp-skeleton" style="height:' + (h || 72) + 'px"></div>'; }
+    function card(title, body, extra) {
+      return '<section class="lp-card p-4">' + (title ? '<div class="flex items-center justify-between gap-2 mb-3"><h2 class="font-semibold text-slate-800">' + title + '</h2>' + (extra || '') + '</div>' : '') + body + '</section>';
+    }
+    function table(cols, rows) {
+      return '<div class="lp-scroll"><table class="lp-table"><thead><tr>' + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') +
+        '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+    }
+    function field(label, inner) { return '<label class="block"><span class="lp-label">' + esc(label) + '</span>' + inner + '</label>'; }
+    function input(name, value, attrs) { return '<input class="lp-input" name="' + name + '" value="' + esc(value === undefined || value === null ? '' : value) + '" ' + (attrs || '') + '>'; }
+    function select(name, options, value, attrs) {
+      return '<select class="lp-input" name="' + name + '" ' + (attrs || '') + '>' + options.map(function (o) {
+        var v = Array.isArray(o) ? o[0] : o;
+        var t = Array.isArray(o) ? o[1] : o;
+        return '<option value="' + esc(v) + '"' + (String(v) === String(value) ? ' selected' : '') + '>' + esc(t) + '</option>';
+      }).join('') + '</select>';
+    }
+    function formData(form) {
+      var o = {};
+      Array.prototype.forEach.call(form.elements, function (el) {
+        if (!el.name) return;
+        if (el.type === 'checkbox') o[el.name] = el.checked;
+        else o[el.name] = el.value;
+      });
+      return o;
+    }
+    function download(filename, text, type) {
+      var blob = new Blob([text], { type: type || 'text/csv' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+    function labOptions() { return (S.init.labs || []).map(function (l) { return [l.lab_id, l.name]; }); }
+    function curLab() {
+      var labs = S.init.labs || [];
+      return labs.filter(function (l) { return l.lab_id === S.lab; })[0] || labs[0] || null;
+    }
+
+    /* ================= sections (independently loaded regions) ================= */
+
+    function section(id, def) {
+      S.sections[id] = def;
+      S.active.push(id);
+      return '<div id="sec-' + id + '">' + (def.data !== undefined && def.keep ? def.html(def.data) : skeleton(def.height)) + '</div>';
+    }
+    function loadSection(id) {
+      var d = S.sections[id];
+      if (!d) return Promise.resolve();
+      return d.load().then(function (data) {
+        d.data = data;
+        d.error = null;
+      }, function (e) {
+        d.error = e;
+      }).then(function () { paintSection(id); });
+    }
+    function paintSection(id) {
+      var d = S.sections[id];
+      var el = document.getElementById('sec-' + id);
+      if (!d || !el) return;
+      el.innerHTML = d.error ? errorBox(d.error) : d.html(d.data);
+    }
+    function loadAll() { S.active.forEach(loadSection); }
+
+    /* ================= modal ================= */
+
+    function openModal(title, body, onSubmit, submitLabel) {
+      var root = document.getElementById('modal-root');
+      root.innerHTML =
+        '<div class="fixed inset-0 bg-slate-900/50 z-40 flex items-end sm:items-center justify-center p-0 sm:p-4" data-act="modal-backdrop">' +
+        '<form class="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl p-5 max-h-[92vh] overflow-y-auto" id="modal-form">' +
+        '<div class="flex items-start justify-between gap-3 mb-4"><h3 class="font-semibold text-lg">' + esc(title) + '</h3>' +
+        '<button type="button" class="text-slate-400 text-2xl leading-none" data-act="modal-close" aria-label="Close">&times;</button></div>' +
+        '<div class="space-y-3">' + body + '</div>' +
+        '<div id="modal-error" class="hidden mt-3 rounded-lg bg-red-50 text-red-800 text-sm p-3"></div>' +
+        (onSubmit ? '<div class="flex justify-end gap-2 mt-5"><button type="button" class="lp-btn lp-btn-ghost" data-act="modal-close">Cancel</button>' +
+          '<button class="lp-btn lp-btn-primary" id="modal-submit">' + esc(submitLabel || 'Save') + '</button></div>' : '') +
+        '</form></div>';
+      var form = document.getElementById('modal-form');
+      form.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        if (!onSubmit) return;
+        var btn = document.getElementById('modal-submit');
+        var err = document.getElementById('modal-error');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="lp-spin"></span> Working…';
+        err.classList.add('hidden');
+        Promise.resolve(onSubmit(formData(form), form)).then(function (keepOpen) {
+          if (!keepOpen) closeModal();
+        }, function (e) {
+          err.textContent = e && e.message ? e.message : 'Something went wrong.';
+          err.classList.remove('hidden');
+        }).then(function () {
+          if (document.getElementById('modal-submit')) {
+            btn.disabled = false;
+            btn.textContent = submitLabel || 'Save';
+          }
+        });
+      });
+      var first = form.querySelector('input,select,textarea');
+      if (first) first.focus();
+    }
+    function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+    /* ================= shell ================= */
+
+    var TABS = [
+      { id: 'home', label: 'Home', show: function () { return role() === 'STUDENT'; }, view: viewHome },
+      { id: 'history', label: 'My history', show: function () { return role() === 'STUDENT'; }, view: viewHistory },
+      { id: 'live', label: 'Live', show: function () { return can('staffSummary'); }, view: viewLive },
+      { id: 'sessions', label: 'My sessions', show: function () { return can('facultySessions'); }, view: viewFaculty },
+      { id: 'reviews', label: 'Reviews', show: function () { return can('reviewQueue'); }, view: viewReviews },
+      { id: 'inventory', label: 'Inventory', show: function () { return can('inventory'); }, view: viewInventory },
+      { id: 'courses', label: 'Courses & events', show: function () { return can('sessions'); }, view: viewCourses },
+      { id: 'reports', label: 'Reports', show: function () { return can('reportDaily') || can('exportRange'); }, view: viewReports },
+      { id: 'settings', label: 'Settings', show: function () { return can('settingsGet'); }, view: viewSettings },
+      { id: 'people', label: 'People', show: function () { return can('users'); }, view: viewPeople },
+      { id: 'audit', label: 'Audit', show: function () { return can('audit'); }, view: viewAudit }
+    ];
+    function visibleTabs() { return TABS.filter(function (t) { return t.show(); }); }
+
+    function header() {
+      var me = S.init.me;
+      var labs = S.init.labs || [];
+      var roleName = { STUDENT: 'Student', FACULTY: 'Faculty', STAFF: 'Lab staff', SUPER_ADMIN: 'Super Admin' }[me.role] || '';
+      return '<header class="bg-white border-b border-slate-200 sticky top-0 z-30">' +
+        '<div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">' +
+        '<div class="flex items-center gap-2 mr-auto"><div class="w-8 h-8 rounded-lg bg-teal-700 text-white grid place-items-center font-black">L</div>' +
+        '<div><div class="font-bold leading-tight">LabPulse</div><div class="text-xs text-slate-500 leading-tight">' + esc(me.name || me.email) + (roleName ? ' · ' + roleName : '') + '</div></div></div>' +
+        (labs.length > 1 ? '<select class="lp-input !w-auto !py-1.5 text-sm" id="lab-select">' + labs.map(function (l) {
+          return '<option value="' + esc(l.lab_id) + '"' + (l.lab_id === S.lab ? ' selected' : '') + '>' + esc(l.name) + '</option>';
+        }).join('') + '</select>' : '<span class="text-sm text-slate-600 font-medium">' + esc(curLab() ? curLab().name : '') + '</span>') +
+        '<div id="occ-pill">' + occPill() + '</div>' +
+        '</div>' +
+        '<nav class="max-w-7xl mx-auto px-2 flex overflow-x-auto" role="tablist">' + visibleTabs().map(function (t) {
+          return '<button class="lp-tab" role="tab" aria-selected="' + (t.id === S.tab) + '" data-act="tab" data-tab="' + t.id + '">' + esc(t.label) + '</button>';
+        }).join('') + '</nav></header>';
+    }
+
+    function occPill() {
+      var n = S.occ;
+      return '<div class="flex items-center gap-2 rounded-full bg-teal-50 text-teal-800 px-3 py-1 text-sm font-semibold" title="Verified check-ins inside now; check-ins awaiting review are shown separately">' +
+        '<span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-60"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-teal-600"></span></span>' +
+        (n === null ? '…' : n) + ' inside' + (S.occPending ? '<span class="text-amber-700 font-medium">· ' + S.occPending + ' pending</span>' : '') + '</div>';
+    }
+
+    function render() {
+      var app = document.getElementById('app');
+      if (BOOT.error && !S.init) return renderFatal(BOOT.error);
+      if (!S.init.me.registered) return renderRegister();
+      if (S.checkin) return renderCheckin();
+      var tabs = visibleTabs();
+      if (!tabs.length) return renderFatal({ message: 'Your account has no LabPulse role yet. Ask the lab in-charge.' });
+      if (!S.tab || !tabs.some(function (t) { return t.id === S.tab; })) S.tab = tabs[0].id;
+      S.active = [];
+      var tab = tabs.filter(function (t) { return t.id === S.tab; })[0];
+      app.innerHTML = header() + '<main class="max-w-7xl mx-auto p-4 space-y-4 pb-24">' + tab.view() + '</main>';
+      loadAll();
+    }
+
+    function renderFatal(e) {
+      document.getElementById('app').innerHTML =
+        '<div class="min-h-screen grid place-items-center p-6"><div class="lp-card p-6 max-w-md text-center">' +
+        '<div class="text-4xl mb-3">🔒</div><h1 class="text-lg font-bold mb-2">LabPulse</h1>' +
+        '<p class="text-slate-600">' + esc(e.message) + '</p>' +
+        '<a class="lp-btn lp-btn-primary mt-5" href="' + esc(BOOT.webAppUrl) + '">Reload</a></div></div>';
+    }
+
+    /* ================= registration (FR-02) ================= */
+
+    function renderRegister() {
+      var me = S.init.me;
+      document.getElementById('app').innerHTML =
+        '<div class="min-h-screen grid place-items-center p-4"><form id="reg-form" class="lp-card p-6 w-full max-w-md space-y-4">' +
+        '<div><h1 class="text-xl font-bold">Welcome to LabPulse</h1><p class="text-sm text-slate-600 mt-1">One-time profile for <b>' + esc(me.email) + '</b>.' +
+        (BOOT.claim && BOOT.claim.ok ? ' Your QR scan is held for a few minutes while you finish.' : '') + '</p></div>' +
+        field('Full name', input('name', me.name, 'required autocomplete="name"')) +
+        field('Roll number / employee ID', input('reg_no', me.reg_no, 'required placeholder="URK24CS1249" autocapitalize="characters"')) +
+        field('Mobile number', input('mobile', '', 'required inputmode="tel" placeholder="98765 43210" autocomplete="tel"')) +
+        '<div id="reg-error" class="hidden rounded-lg bg-red-50 text-red-800 text-sm p-3"></div>' +
+        '<button class="lp-btn lp-btn-primary w-full" id="reg-btn">Save and continue</button>' +
+        '<p class="text-xs text-slate-500">Your mobile number is visible only to lab staff and administrators. It never appears in exports.</p>' +
+        '</form></div>';
+      document.getElementById('reg-form').addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var btn = document.getElementById('reg-btn');
+        var err = document.getElementById('reg-error');
+        btn.disabled = true;
+        err.classList.add('hidden');
+        call('register', formData(ev.target)).then(function () {
+          return call('bootstrap');
+        }).then(function (init) {
+          S.init = init;
+          afterInit();
+        }, function (e) {
+          err.textContent = e.message;
+          err.classList.remove('hidden');
+          btn.disabled = false;
+        });
+      });
+    }
+
+    /* ================= check-in flow (§4.1) ================= */
+
+    function startCheckin(claim) {
+      S.checkin = {
+        claim: claim,
+        expiresAt: Date.now() + (claim.expiresInSec || 300) * 1000,
+        step: 'form',
+        loc: { state: 'pending' },
+        reason: { type: null, sessionId: '', purpose: '', equipment: '', equip: [], manual: false, m_code: '', m_name: '', m_coord: '', m_hours: '' },
+        options: null,
+        result: null,
+        error: null,
+        requestId: null
+      };
+      render();
+      startLocation();
+      call('checkinOptions', { labId: claim.labId }).then(function (o) {
+        S.checkin.options = o;
+        if (S.checkin.step === 'form') renderCheckin();
+      }, function () {
+        S.checkin.options = { courses: [], events: [] };
+        if (S.checkin.step === 'form') renderCheckin();
+      });
+    }
+
+    function startLocation() {
+      var c = S.checkin;
+      c.loc = { state: 'pending' };
+      paintLoc();
+      if (!navigator.geolocation) {
+        c.loc = { state: 'error', msg: 'This browser cannot share location. Ask lab staff for a supervised entry.' };
+        return paintLoc();
+      }
+      var started = Date.now();
+      var watch = navigator.geolocation.watchPosition(function (pos) {
+        var acc = pos.coords.accuracy;
+        if (!c.loc.best || acc < c.loc.best.accuracy) {
+          c.loc.best = {
+            lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: acc, ts: pos.timestamp || Date.now(),
+            // Only a few browsers expose this; a missing flag proves nothing (§4.2 step 9).
+            mock: pos.coords.mocked === true || pos.mocked === true || pos.coords.isMock === true ? true : null
+          };
+        }
+        c.loc.state = 'ok';
+        paintLoc();
+        if (acc <= 15 || Date.now() - started > 20000) navigator.geolocation.clearWatch(watch);
+      }, function (err) {
+        if (c.loc.best) return;
+        c.loc = err.code === 1
+          ? { state: 'denied' }
+          : { state: 'error', msg: err.code === 3 ? 'Getting a location fix took too long. Move near a window and retry.' : 'Your phone could not get a location fix. Retry, or ask lab staff.' };
+        paintLoc();
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+      setTimeout(function () { navigator.geolocation.clearWatch(watch); }, 30000);
+    }
+
+    function locHtml() {
+      var l = S.checkin.loc;
+      if (l.state === 'pending') return '<div class="flex items-center gap-2 text-slate-600"><span class="lp-spin"></span> Getting your location… allow it when your phone asks.</div>';
+      if (l.state === 'ok') {
+        var a = Math.round(l.best.accuracy);
+        return '<div class="flex items-center gap-2 flex-wrap">' + badge(a <= 30 ? 'green' : 'amber', a <= 30 ? 'Location ready' : 'Weak GPS') +
+          '<span class="text-sm text-slate-600">accuracy ±' + a + ' m' + (a > 30 ? ' — you can still check in; it may need review' : '') + '</span></div>';
+      }
+      if (l.state === 'denied') {
+        return '<div class="rounded-lg bg-amber-50 text-amber-900 text-sm p-3 space-y-1"><b>Location is blocked.</b>' +
+          '<p>LabPulse needs your location once to confirm you are in the lab. Nothing is saved except whether you were inside.</p>' +
+          '<p><b>To allow it:</b> tap the lock or ⓘ icon next to the address → Permissions → Location → Allow. Then tap Retry.</p>' +
+          '<p>If you cannot share location, ask lab staff for a supervised manual entry.</p>' +
+          '<button type="button" class="lp-btn lp-btn-ghost lp-btn-sm mt-1" data-act="loc-retry">Retry</button></div>';
+      }
+      return '<div class="rounded-lg bg-red-50 text-red-800 text-sm p-3">' + esc(l.msg) + ' <button type="button" class="underline" data-act="loc-retry">Retry</button></div>';
+    }
+    function paintLoc() {
+      var el = document.getElementById('loc-status');
+      if (el) el.innerHTML = locHtml();
+      paintSubmit();
+    }
+    function equipmentText() {
+      var r = S.checkin.reason;
+      return r.equip.concat(r.equipment.trim() ? [r.equipment.trim()] : []).join(', ');
+    }
+    function reasonComplete() {
+      var r = S.checkin.reason;
+      var hours = Number(r.m_hours);
+      if ((r.type === 'COURSE' || r.type === 'EVENT') && r.manual) {
+        return hours >= 0.5 && (r.type === 'COURSE'
+          ? r.m_code.trim().length >= 2 && r.m_name.trim().length >= 3
+          : r.m_name.trim().length >= 3 && r.m_coord.trim().length >= 3);
+      }
+      if (r.type === 'COURSE' || r.type === 'EVENT') return !!r.sessionId;
+      if (r.type === 'RESEARCH') return r.purpose.trim().length >= 5 && equipmentText().length > 0;
+      return false;
+    }
+    function paintSubmit() {
+      var b = document.getElementById('ci-submit');
+      if (!b) return;
+      var ready = S.checkin.loc.state === 'ok' && reasonComplete();
+      b.disabled = !ready;
+      var hint = document.getElementById('ci-hint');
+      if (hint) {
+        hint.textContent = S.checkin.loc.state !== 'ok' ? 'Waiting for your location…' : !S.checkin.reason.type ? 'Choose why you are here.' : !reasonComplete() ? 'Complete the details above.' : '';
+      }
+    }
+
+    function reasonFields() {
+      var c = S.checkin;
+      var r = c.reason;
+      if (!r.type) return '';
+      if (!c.options) return '<div class="mt-3">' + skeleton(48) + '</div>';
+      if (r.type === 'RESEARCH') {
+        var chips = (c.options.equipment || []).concat(['None']).map(function (t) {
+          var on = r.equip.indexOf(t) !== -1;
+          return '<button type="button" class="rounded-full border px-3 py-1 text-sm ' + (on ? 'bg-teal-50 border-teal-600 text-teal-800 font-semibold' : 'bg-white border-slate-300') +
+            '" aria-pressed="' + on + '" data-act="ci-equip" data-type="' + esc(t) + '">' + (on ? '✓ ' : '') + esc(t) + '</button>';
+        }).join('');
+        return '<div class="space-y-3 mt-3">' +
+          field('Purpose of visit', '<textarea class="lp-input" rows="2" data-bind="purpose" placeholder="e.g. Training a CNN for my final-year project">' + esc(r.purpose) + '</textarea>') +
+          '<div><span class="lp-label">Specific hardware / equipment required</span><div class="flex flex-wrap gap-2">' + chips + '</div></div>' +
+          field('Other equipment (optional)', '<input class="lp-input" data-bind="equipment" placeholder="anything not listed above" value="' + esc(r.equipment) + '">') + '</div>';
+      }
+      var isCourse = r.type === 'COURSE';
+      var toggle = '<button type="button" class="text-sm text-teal-700 font-semibold mt-3" data-act="ci-manual">' +
+        (r.manual ? '← Pick from the timetable instead' : 'My ' + (isCourse ? 'course' : 'event') + ' isn’t listed') + '</button>';
+      if (r.manual) {
+        return '<div class="space-y-3 mt-3">' +
+          (isCourse
+            ? field('Course code', '<input class="lp-input" data-bind="m_code" placeholder="23CS2048" autocapitalize="characters" value="' + esc(r.m_code) + '">') +
+              field('Course name', '<input class="lp-input" data-bind="m_name" value="' + esc(r.m_name) + '">') +
+              field('Session duration (hours)', '<input class="lp-input" data-bind="m_hours" inputmode="decimal" placeholder="2" value="' + esc(r.m_hours) + '">')
+            : field('Event name', '<input class="lp-input" data-bind="m_name" value="' + esc(r.m_name) + '">') +
+              field('Event coordinator name', '<input class="lp-input" data-bind="m_coord" value="' + esc(r.m_coord) + '">') +
+              field('Expected duration (hours)', '<input class="lp-input" data-bind="m_hours" inputmode="decimal" placeholder="3" value="' + esc(r.m_hours) + '">')) +
+          '<p class="text-xs text-slate-500">Not in the timetable, so lab staff will confirm it with one tap.</p></div>' + toggle;
+      }
+      var list = isCourse ? c.options.courses : c.options.events;
+      if (!list.length) return '<p class="text-sm text-slate-600 mt-3">No ' + (isCourse ? 'lab course' : 'event') + ' is scheduled in this lab right now.</p>' + toggle;
+      return '<div class="space-y-2 mt-3">' + list.map(function (s) {
+        var sel = s.id === r.sessionId;
+        return '<button type="button" class="lp-option" aria-pressed="' + sel + '" data-act="ci-session" data-id="' + esc(s.id) + '">' +
+          '<div class="font-semibold">' + esc((s.code ? s.code + ' · ' : '') + s.name) + '</div>' +
+          '<div class="text-xs text-slate-500 mt-0.5">' + esc([s.coordinator, s.start_time && s.end_time ? s.start_time + '–' + s.end_time : '', s.session_hours ? s.session_hours + ' h' : ''].filter(Boolean).join(' · ')) + '</div></button>';
+      }).join('') + '</div>' + toggle;
+    }
+
+    function renderCheckin() {
+      var c = S.checkin;
+      var app = document.getElementById('app');
+      var shell = function (inner) {
+        return '<div class="min-h-screen max-w-md mx-auto p-4 flex flex-col gap-4">' +
+          '<div class="flex items-center gap-2 pt-2"><div class="w-8 h-8 rounded-lg bg-teal-700 text-white grid place-items-center font-black">L</div><div class="font-bold">LabPulse</div></div>' + inner + '</div>';
+      };
+      if (!c.claim.ok) {
+        app.innerHTML = shell('<div class="lp-card p-6 text-center"><div class="text-4xl mb-2">⚠️</div><h1 class="text-lg font-bold">Not checked in</h1>' +
+          '<p class="text-slate-600 mt-2">' + esc(c.claim.message) + '</p>' +
+          '<button class="lp-btn lp-btn-primary mt-5 w-full" data-act="ci-done">Go to my dashboard</button></div>');
+        return;
+      }
+      if (c.step === 'submitting') {
+        app.innerHTML = shell('<div class="lp-card p-8 text-center"><div class="flex justify-center mb-3 text-teal-700"><span class="lp-spin" style="width:2rem;height:2rem"></span></div>' +
+          '<h1 class="text-lg font-bold">Checking… please wait</h1><p class="text-sm text-slate-500 mt-1">Verifying your scan and location.</p></div>');
+        return;
+      }
+      if (c.step === 'result') return renderCheckinResult(shell);
+      var r = c.reason;
+      var opt = function (type, title, sub) {
+        return '<button type="button" class="lp-option" aria-pressed="' + (r.type === type) + '" data-act="ci-type" data-type="' + type + '">' +
+          '<div class="font-semibold">' + title + '</div><div class="text-xs text-slate-500">' + sub + '</div></button>';
+      };
+      app.innerHTML = shell(
+        '<div class="lp-card p-4"><div class="text-xs uppercase tracking-wide text-slate-500 font-semibold">Checking in to</div>' +
+        '<div class="text-xl font-bold">' + esc(c.claim.labName) + '</div>' +
+        '<div class="text-xs text-slate-500 mt-1">Finish within ' + Math.max(1, Math.round((c.expiresAt - Date.now()) / 60000)) + ' minutes, or scan again.</div></div>' +
+        '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">1 · Location</div><div id="loc-status">' + locHtml() + '</div></div>' +
+        '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">2 · Why are you here?</div><div class="grid gap-2">' +
+        opt('COURSE', 'Regular lab course', 'Course code, name and session hours fill in from the timetable') +
+        opt('EVENT', 'Event / workshop', 'Event name, coordinator and expected duration') +
+        opt('RESEARCH', 'Individual research', 'Your purpose and the equipment you need') +
+        '</div><div id="ci-fields">' + reasonFields() + '</div></div>' +
+        (c.error ? '<div class="rounded-lg bg-red-50 text-red-800 text-sm p-3">' + esc(c.error.message) + '</div>' : '') +
+        '<div class="sticky bottom-0 bg-slate-100 pt-2 pb-4"><button class="lp-btn lp-btn-primary w-full !py-3 text-base" id="ci-submit" data-act="ci-submit" disabled>Check in</button>' +
+        '<p id="ci-hint" class="text-center text-xs text-slate-500 mt-2"></p></div>'
+      );
+      paintSubmit();
+    }
+
+    function renderCheckinResult(shell) {
+      var res = S.checkin.result;
+      var o = res.outcome;
+      var v = res.visit;
+      var head = o === 'GREEN' ? ['✅', 'Checked in', 'bg-green-50 text-green-900']
+        : o === 'AMBER' ? ['🟡', 'Checked in — pending review', 'bg-amber-50 text-amber-900']
+        : o === 'EXISTING' ? ['ℹ️', 'You are already checked in', 'bg-blue-50 text-blue-900']
+        : ['⛔', 'Not checked in', 'bg-red-50 text-red-900'];
+      var why = (res.reasons || []).length ? '<ul class="text-sm mt-3 text-left list-disc pl-5 space-y-1">' + res.reasons.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '';
+      var note = o === 'AMBER' ? '<p class="text-sm mt-3">You count as inside. Your ' + (v && v.entry_type === 'RESEARCH' ? 'lab staff' : 'faculty') + ' will confirm with one tap.</p>'
+        : o === 'RED' ? '<p class="text-sm mt-3">If you are in the lab, move closer to the centre of the room and scan the QR again, or ask lab staff.</p>' : '';
+      document.getElementById('app').innerHTML = shell(
+        '<div class="rounded-2xl p-6 text-center ' + head[2] + '"><div class="text-5xl mb-2">' + head[0] + '</div><h1 class="text-xl font-bold">' + head[1] + '</h1>' +
+        (v ? '<p class="mt-2 font-medium">' + esc(v.lab_name) + '</p><p class="text-sm">' + esc(v.label) + ' · since ' + fmtTime(v.check_in_at) + '</p>' : '') +
+        why + note + '</div>' +
+        '<button class="lp-btn lp-btn-primary w-full !py-3" data-act="ci-done">Go to my dashboard</button>');
+    }
+
+    function submitCheckin() {
+      var c = S.checkin;
+      if (!c.loc.best || !reasonComplete()) return;
+      c.requestId = c.requestId || rid();
+      var b = c.loc.best;
+      var r = c.reason;
+      var payload = {
+        labId: c.claim.labId, lat: b.lat, lng: b.lng, accuracy: b.accuracy, mock: b.mock, posAgeMs: Date.now() - b.ts,
+        requestId: c.requestId,
+        reason: r.type === 'RESEARCH' ? { type: r.type, purpose: r.purpose, equipment: equipmentText() }
+          : r.manual ? { type: r.type, manual: r.type === 'COURSE'
+            ? { code: r.m_code, name: r.m_name, hours: Number(r.m_hours) }
+            : { event_name: r.m_name, coordinator: r.m_coord, hours: Number(r.m_hours) } }
+          : { type: r.type, sessionId: r.sessionId }
+      };
+      c.step = 'submitting';
+      c.error = null;
+      renderCheckin();
+      var attempt = 0;
+      (function tryOnce() {
+        call('checkIn', payload).then(function (res) {
+          c.result = res;
+          c.step = 'result';
+          renderCheckin();
+        }, function (e) {
+          // A network drop is retried with the same request ID, so it can never create a second visit.
+          if (e.code === 'NETWORK' && attempt++ < 2) return sleep(1500).then(tryOnce);
+          c.step = 'form';
+          c.error = e;
+          if (e.code !== 'NETWORK') c.requestId = null;
+          renderCheckin();
+        });
+      })();
+    }
+
+    /* ================= student ================= */
+
+    function studentLab() { return S.status && S.status.visit ? S.status.visit.lab_id : S.lab; }
+
+    function viewHome() {
+      return section('status', { live: true, height: 120, load: function () { return call('status'); }, html: htmlStatus }) +
+        '<div class="grid md:grid-cols-2 gap-4">' +
+        section('free', { live: true, load: function () { return call('freeNow', { labId: studentLab() }); }, html: htmlFree }) +
+        section('myitems', { live: true, load: function () { return call('myItems'); }, html: htmlMyItems }) +
+        '</div>' +
+        section('map', { live: true, height: 160, load: function () { return call('labMap', { labId: studentLab() }); }, html: htmlMap }) +
+        section('recent', { load: function () { return call('myHistory'); }, html: function (d) { return card('Recent visits', htmlVisits(d.slice(0, 5))); } });
+    }
+
+    function htmlStatus(st) {
+      var changed = !S.status || !!S.status.checkedIn !== !!st.checkedIn;
+      S.status = st;
+      if (changed) setTimeout(function () { paintSection('free'); }, 0);
+      var body;
+      if (st.checkedIn) {
+        var v = st.visit;
+        body = '<div class="flex items-start justify-between gap-3 flex-wrap"><div>' +
+          '<div class="flex items-center gap-2 flex-wrap"><span class="text-xl font-bold text-teal-800">Checked in · ' + dur(v.duration_ms) + '</span>' + visitBadge(v) + '</div>' +
+          '<div class="text-slate-600 mt-1">' + esc(v.lab_name) + ' · ' + esc(v.label) + '</div>' +
+          '<div class="text-xs text-slate-500 mt-1">Since ' + fmtTime(v.check_in_at) + (v.expected_end_at ? ' · closes automatically at ' + fmtTime(v.expected_end_at) + ' if you forget' : '') + '</div>' +
+          (v.review_status === 'PENDING' ? '<div class="text-xs text-amber-800 mt-2">Your check-in is waiting for a one-tap review. You count as inside meanwhile.</div>' : '') +
+          '</div><button class="lp-btn lp-btn-primary" data-act="checkout">Check out</button></div>';
+      } else if (st.ticket) {
+        body = '<div class="flex items-center justify-between gap-3 flex-wrap"><div><div class="text-xl font-bold">Scan received</div>' +
+          '<div class="text-slate-600 text-sm">Finish checking in to ' + esc(st.ticket.labName) + ' within ' + Math.max(1, Math.round(st.ticket.expiresInSec / 60)) + ' min.</div></div>' +
+          '<button class="lp-btn lp-btn-primary" data-act="resume-checkin" data-lab="' + esc(st.ticket.labId) + '" data-name="' + esc(st.ticket.labName) + '" data-exp="' + st.ticket.expiresInSec + '">Continue check-in</button></div>';
+      } else {
+        body = '<div class="flex items-center justify-between gap-3 flex-wrap"><div><div class="text-xl font-bold">Not checked in</div>' +
+          '<div class="text-slate-600 text-sm">Scan the QR on the lab monitor with your phone camera.</div></div>' +
+          '<button class="lp-btn lp-btn-primary" data-act="scan-help">Scan</button></div>';
+      }
+      return '<section class="lp-card p-5">' + body + '</section>';
+    }
+
+    function htmlFree(list) {
+      var inLab = S.status && S.status.checkedIn && S.status.visit.review_status !== 'PENDING';
+      var pendingNote = S.status && S.status.checkedIn && !inLab;
+      var chips = list.length ? '<div class="flex flex-wrap gap-2">' + list.map(function (x) {
+        return '<span class="rounded-full bg-green-50 text-green-800 border border-green-200 px-3 py-1 text-sm font-semibold">' + x.count + ' ' + esc(x.type) + '</span>';
+      }).join('') + '</div>' : empty('Nothing is free right now.');
+      return card('Free right now', chips +
+        '<div class="mt-4 flex items-center gap-3 flex-wrap"><button class="lp-btn lp-btn-primary" data-act="request-asset"' + (inLab && list.length ? '' : ' disabled') + '>Request equipment</button>' +
+        (inLab ? '' : '<span class="text-xs text-slate-500">' + (pendingNote ? 'You can request equipment once your check-in is confirmed.' : 'You can request equipment while you are checked in to the lab.') + '</span>') + '</div>');
+    }
+
+    function htmlMyItems(d) {
+      var open = d.loans.filter(function (l) { return l.status !== 'RETURNED'; });
+      var pending = d.requests.filter(function (r) { return r.status === 'PENDING'; });
+      var rows = open.map(function (l) {
+        return '<li class="flex items-center justify-between gap-2 py-2"><div><div class="font-medium">' + esc(l.asset_name) + '</div><div class="text-xs text-slate-500">Due ' + fmtDT(l.due_at) + '</div></div>' +
+          (l.overdue ? badge('red', 'Overdue') : badge('blue', 'Borrowed')) + '</li>';
+      }).concat(pending.map(function (r) {
+        return '<li class="flex items-center justify-between gap-2 py-2"><div><div class="font-medium">' + esc(r.asset_name) + '</div><div class="text-xs text-slate-500">Requested ' + fmtTime(r.created_at) + ' · collect from lab staff</div></div>' +
+          '<div class="flex items-center gap-2">' + badge('amber', 'Requested') + '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="cancel-request" data-id="' + esc(r.request_id) + '">Cancel</button></div></li>';
+      }));
+      return card('My items', rows.length ? '<ul class="divide-y divide-slate-100">' + rows.join('') + '</ul>' : empty('You have nothing borrowed.'),
+        '<button class="text-sm text-teal-700 font-semibold" data-act="tab" data-tab="history">Full history</button>');
+    }
+
+    function htmlMap(m) {
+      var grid = [];
+      for (var y = 0; y < m.rows; y++) for (var x = 0; x < m.cols; x++) grid.push(null);
+      m.cells.forEach(function (c) { if (c.map_y < m.rows && c.map_x < m.cols) grid[c.map_y * m.cols + c.map_x] = c; });
+      var color = { AVAILABLE: 'lp-green', RESERVED: 'lp-amber', ISSUED: 'lp-blue', UNAVAILABLE: 'lp-gray' };
+      var cells = grid.map(function (c) {
+        if (!c) return '<div class="lp-cell"></div>';
+        return '<div class="lp-cell has ' + (color[c.status] || 'lp-gray') + '" title="' + esc(c.name + ' — ' + c.status) + '">' + esc(c.asset_id) + '</div>';
+      }).join('');
+      var legend = '<div class="flex flex-wrap gap-2 mt-3">' + badge('green', 'Available') + badge('amber', 'Reserved') + badge('blue', 'Issued / in use') + badge('gray', 'Unavailable') + '</div>';
+      return card('Live lab map', '<div class="lp-map" style="grid-template-columns:repeat(' + m.cols + ',minmax(0,1fr))">' + cells + '</div>' + legend +
+        '<p class="text-xs text-slate-500 mt-2">' + esc(m.note) + '</p>', '<span class="text-xs text-slate-500">' + m.occupancy + ' people inside</span>');
+    }
+
+    function htmlVisits(list) {
+      if (!list.length) return empty('No visits yet.');
+      return table(['Date', 'Lab', 'Reason', 'In', 'Out', 'Time', 'Status'], list.map(function (v) {
+        return [fmtDT(v.check_in_at).split(',')[0], esc(v.lab_name), esc(v.label), fmtTime(v.check_in_at),
+          v.check_out_at ? fmtTime(v.check_out_at) : '<span class="text-teal-700 font-semibold">inside</span>',
+          v.status === 'VOIDED' ? '—' : dur(v.duration_ms), visitBadge(v) + (v.close_type && v.close_type !== 'MANUAL' ? '<div class="text-xs text-slate-500 mt-1">' + esc(closeLabel(v.close_type)) + '</div>' : '')];
+      }));
+    }
+
+    function viewHistory() {
+      return section('hist-items', { load: function () { return call('myItems'); }, html: function (d) {
+        return card('Borrowing history', d.loans.length ? table(['Item', 'Issued', 'Due', 'Returned', 'Status'], d.loans.map(function (l) {
+          return [esc(l.asset_name), fmtDT(l.issued_at), fmtDT(l.due_at), l.returned_at ? fmtDT(l.returned_at) : '—',
+            l.status === 'RETURNED' ? badge('gray', 'Returned' + (l.return_condition ? ' · ' + l.return_condition.toLowerCase() : '')) : l.overdue ? badge('red', 'Overdue') : badge('blue', 'Borrowed')];
+        })) : empty('You have not borrowed anything yet.'));
+      } }) +
+      section('hist-visits', { load: function () { return call('myHistory'); }, html: function (d) { return card('Visit history', htmlVisits(d)); } }) +
+      (can('myPassport') ? card('Lab Passport', '<p class="text-sm text-slate-600 mb-3">A one-page PDF of your verified lab hours, courses and equipment handled.</p><button class="lp-btn lp-btn-ghost" data-act="passport">Generate my Lab Passport</button>') : '');
+    }
+
+    /* ================= faculty (FR-27) ================= */
+
+    function viewFaculty() {
+      return section('fsessions', { load: function () { return call('facultySessions', { labId: S.lab }); }, html: function (list) {
+        if (!S.roster.sessionId && list.length) {
+          var running = list.filter(function (s) { return s.running; })[0] || list[0];
+          S.roster.sessionId = running.id;
+          setTimeout(function () { loadSection('roster'); }, 0);
+        }
+        return card('Today’s sessions', list.length ? '<div class="flex flex-wrap gap-2">' + list.map(function (s) {
+          return '<button class="lp-option !w-auto" aria-pressed="' + (s.id === S.roster.sessionId) + '" data-act="pick-session" data-id="' + esc(s.id) + '">' +
+            '<div class="font-semibold text-sm">' + esc((s.code ? s.code + ' · ' : '') + s.name) + '</div>' +
+            '<div class="text-xs text-slate-500">' + esc(s.start_time ? s.start_time + '–' + s.end_time : 'All day') + ' ' + (s.running ? badge('green', 'Running') : '') + '</div></button>';
+        }).join('') + '</div>' : empty('You have no sessions in this lab today.'));
+      } }) +
+      '<div class="grid lg:grid-cols-3 gap-4"><div class="lg:col-span-2">' +
+      section('roster', { live: true, height: 220, load: function () {
+        return S.roster.sessionId ? call('roster', { sessionId: S.roster.sessionId, date: S.roster.date || todayKey() }) : Promise.resolve(null);
+      }, html: htmlRoster }) +
+      '</div><div>' + section('freviews', { live: true, load: function () { return call('reviewQueue', { labId: S.lab }); }, html: htmlReviewList }) + '</div></div>';
+    }
+
+    function htmlRoster(d) {
+      if (!d) return card('Roster', empty('Pick a session to see its roster.'));
+      var r = d.roster;
+      var col = function (title, color, list, actions) {
+        return '<div><div class="flex items-center gap-2 mb-2">' + badge(color, title) + '<span class="text-sm text-slate-500">' + list.length + '</span></div>' +
+          (list.length ? '<ul class="space-y-1.5">' + list.map(function (x) {
+            return '<li class="rounded-lg bg-slate-50 px-3 py-2 text-sm"><div class="flex justify-between gap-2"><div><div class="font-medium">' + esc(x.name) + '</div><div class="text-xs text-slate-500">' + esc(x.reg_no) +
+              (x.check_in_at ? ' · in ' + fmtTime(x.check_in_at) : '') + (x.check_out_at ? ' · out ' + fmtTime(x.check_out_at) : '') + (x.mark ? ' · marked ' + esc(x.mark.toLowerCase()) : '') + (x.enrolled ? '' : ' · walk-in') + '</div>' +
+              (x.mark_reason ? '<div class="text-xs text-slate-500 italic">' + esc(x.mark_reason) + '</div>' : '') + '</div>' +
+              '<div class="flex gap-1 shrink-0">' + actions(x) + '</div></div></li>';
+          }).join('') + '</ul>' : '<p class="text-xs text-slate-400">None</p>') + '</div>';
+      };
+      var markBtn = function (x, mark, label) {
+        return '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="mark" data-email="' + esc(x.email) + '" data-mark="' + mark + '" data-name="' + esc(x.name) + '">' + label + '</button>';
+      };
+      return card(esc((d.session.code ? d.session.code + ' · ' : '') + d.session.name) + ' <span class="text-sm font-normal text-slate-500">· ' + esc(d.date) + '</span>',
+        '<div class="grid sm:grid-cols-3 gap-4">' +
+        col('Present', 'green', r.present, function (x) { return markBtn(x, 'ABSENT', 'Absent'); }) +
+        col('Pending review', 'amber', r.pending, function () { return ''; }) +
+        col('Not yet arrived', 'gray', r.notArrived.concat(r.absent), function (x) { return markBtn(x, 'PRESENT', 'Present'); }) +
+        '</div><div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-slate-100">' +
+        '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="session-csv">Export session log (CSV)</button>' +
+        '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="session-pdf">Export session log (PDF)</button></div>',
+        '<input type="date" class="lp-input !w-auto !py-1 text-sm" id="roster-date" value="' + esc(d.date) + '">');
+    }
+
+    function htmlReviewList(list) {
+      return card('Pending reviews', list.length ? '<ul class="space-y-2">' + list.map(function (v) {
+        return '<li class="rounded-lg border border-amber-200 bg-amber-50/50 p-3"><div class="flex justify-between gap-2"><div class="font-semibold">' + esc(v.name) + '</div>' + badge('amber', 'Amber') + '</div>' +
+          '<div class="text-xs text-slate-600">' + esc(v.reg_no) + ' · ' + esc(v.label) + ' · ' + fmtTime(v.check_in_at) + (v.status === 'CLOSED' ? ' · left ' + fmtTime(v.check_out_at) : '') + '</div>' +
+          '<div class="text-sm text-amber-900 mt-1">Flagged: ' + esc(v.flag_reason) + '</div>' +
+          '<div class="flex gap-2 mt-2"><button class="lp-btn lp-btn-primary lp-btn-sm" data-act="review" data-id="' + esc(v.visit_id) + '" data-decision="CONFIRM">Confirm</button>' +
+          '<button class="lp-btn lp-btn-danger lp-btn-sm" data-act="review" data-id="' + esc(v.visit_id) + '" data-decision="DECLINE" data-name="' + esc(v.name) + '">Decline</button></div></li>';
+      }).join('') + '</ul>' : empty('Nothing to review. Amber check-ins appear here.'));
+    }
+
+    function viewReviews() {
+      return section('reviews', { live: true, load: function () { return call('reviewQueue', { labId: S.lab }); }, html: htmlReviewList });
+    }
+
+    /* ================= lab staff (FR-26, FR-22) ================= */
+
+    function viewLive() {
+      return section('strip', { live: true, height: 84, load: function () { return call('staffSummary', { labId: S.lab }); }, html: function (s) {
+        S.occ = s.occupancy;
+        S.occPending = s.pending_inside;
+        paintOcc();
+        var tile = function (label, value, color, tab) {
+          return '<div class="lp-card p-3 ' + (tab ? 'cursor-pointer' : '') + '"' + (tab ? ' data-act="tab" data-tab="' + tab + '"' : '') + '><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-2xl font-bold ' + (color || '') + '">' + value + '</div></div>';
+        };
+        return '<div class="grid grid-cols-2 sm:grid-cols-5 gap-3">' + tile('Inside now', s.occupancy + (s.pending_inside ? '<span class="text-sm text-amber-700 font-semibold"> +' + s.pending_inside + ' pending</span>' : ''), 'text-teal-700') + tile('Items out', s.items_out) +
+          tile('Overdue', s.overdue, s.overdue ? 'text-red-700' : '') + tile('Pending requests', s.pending_requests, s.pending_requests ? 'text-amber-700' : '') +
+          tile('Pending reviews', s.pending_reviews, s.pending_reviews ? 'text-amber-700' : '', 'reviews') + '</div>';
+      } }) +
+      '<div class="grid lg:grid-cols-3 gap-4 items-start">' +
+      section('activity', { live: true, height: 300, load: function () { return call('activity', { labId: S.lab }); }, html: htmlActivity }) +
+      '<div class="space-y-4">' + section('smap', { live: true, height: 200, load: function () { return call('labMap', { labId: S.lab }); }, html: htmlMap }) +
+      section('inside', { live: true, load: function () { return call('inside', { labId: S.lab }); }, html: htmlInside }) + '</div>' +
+      section('handshake', { live: true, height: 300, load: function () { return call('handshake', { labId: S.lab }); }, html: htmlHandshake }) +
+      '</div>';
+    }
+
+    function htmlActivity(list) {
+      var meta = {
+        CHECK_IN: ['green', 'Check-in'], CHECK_OUT: ['gray', 'Check-out'], AUTO_CLOSE: ['gray', 'Auto-closed'], STAFF_CHECK_OUT: ['gray', 'Staff check-out'],
+        MANUAL_ENTRY: ['blue', 'Manual entry'], MANUAL_ENTRY_OVERRIDE_HOURS: ['blue', 'Manual (after hours)'], REVIEW_CONFIRM: ['green', 'Review confirmed'],
+        REVIEW_DECLINE: ['red', 'Review declined'], REQUEST: ['amber', 'Request'], ISSUE: ['blue', 'Issued'], RETURN: ['green', 'Returned'], LOAN_OVERDUE: ['red', 'Overdue'],
+        SECURITY_CHECKIN_RED: ['red', 'Rejected check-in'], SECURITY_QR_REUSED: ['red', 'Reused QR'], SECURITY_QR_EXPIRED: ['red', 'Expired QR'], SECURITY_QR_INVALID: ['red', 'Invalid QR']
+      };
+      return card('Live activity', list.length ? '<ul class="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">' + list.map(function (e) {
+        var m = meta[e.action] || ['gray', e.action];
+        var tag = e.action === 'CHECK_IN' ? (e.outcome === 'AMBER' ? badge('amber', 'Check-in · review') : e.outcome === 'GREEN' ? badge('green', 'Check-in') : badge(m[0], m[1])) : badge(m[0], m[1]);
+        return '<li class="py-2 text-sm"><div class="flex items-center justify-between gap-2">' + tag + '<span class="text-xs text-slate-500">' + fmtTime(e.at) + '</span></div>' +
+          '<div class="mt-1 font-medium">' + esc(e.who) + '</div>' + (e.note ? '<div class="text-xs text-slate-500">' + esc(e.note) + '</div>' : '') + '</li>';
+      }).join('') + '</ul>' : empty('No activity yet today.'));
+    }
+
+    function htmlInside(list) {
+      return card('Inside now', (list.length ? '<ul class="divide-y divide-slate-100 max-h-72 overflow-y-auto">' + list.map(function (p) {
+        return '<li class="py-2 text-sm flex items-center justify-between gap-2"><div><div class="font-medium">' + esc(p.name) + ' ' + visitBadge(p) + '</div>' +
+          '<div class="text-xs text-slate-500">' + esc(p.reg_no) + ' · ' + esc(entryLabel(p.entry_type)) + ' · ' + dur(p.duration_ms) + '</div></div>' +
+          '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="force-out" data-id="' + esc(p.visit_id) + '" data-name="' + esc(p.name) + '">Check out</button></li>';
+      }).join('') + '</ul>' : empty('Nobody is checked in.')), '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="manual-entry">Manual entry</button>');
+    }
+
+    function htmlHandshake(d) {
+      var pending = d.pending.length ? '<ul class="space-y-2">' + d.pending.map(function (r) {
+        return '<li class="rounded-lg bg-slate-50 p-3 text-sm"><div class="flex justify-between gap-2"><b>' + esc(r.asset_name) + '</b>' + (r.still_checked_in ? '' : badge('amber', 'Left lab')) + '</div>' +
+          '<div class="text-xs text-slate-600">' + esc(r.requester.name) + ' · ' + esc(r.requester.reg_no) + ' · ' + fmtTime(r.created_at) + '</div>' +
+          (r.note ? '<div class="text-xs italic text-slate-500">“' + esc(r.note) + '”</div>' : '') +
+          '<div class="flex gap-2 mt-2"><button class="lp-btn lp-btn-primary lp-btn-sm" data-act="issue" data-id="' + esc(r.request_id) + '" data-due="' + esc(r.window_end_at) + '" data-name="' + esc(r.asset_name) + '" data-who="' + esc(r.requester.name) + '">Confirm issue</button>' +
+          '<button class="lp-btn lp-btn-danger lp-btn-sm" data-act="reject" data-id="' + esc(r.request_id) + '">Reject</button></div></li>';
+      }).join('') + '</ul>' : empty('No pending requests.');
+      var loans = d.loans.length ? '<ul class="space-y-2">' + d.loans.map(function (l) {
+        return '<li class="rounded-lg bg-slate-50 p-3 text-sm"><div class="flex justify-between gap-2"><b>' + esc(l.asset_name) + '</b>' + (l.overdue ? badge('red', 'Overdue') : badge('blue', 'On loan')) + '</div>' +
+          '<div class="text-xs text-slate-600">' + esc(l.borrower.name) + ' · ' + esc(l.borrower.reg_no) + ' · due ' + fmtDT(l.due_at) + '</div>' +
+          '<button class="lp-btn lp-btn-ghost lp-btn-sm mt-2" data-act="return" data-id="' + esc(l.loan_id) + '" data-name="' + esc(l.asset_name) + '">Mark returned</button></li>';
+      }).join('') + '</ul>' : empty('No items out.');
+      return card('Handshake', '<h3 class="text-xs font-bold uppercase text-slate-500 mb-2">Waiting for handover</h3>' + pending +
+        '<h3 class="text-xs font-bold uppercase text-slate-500 mt-4 mb-2">Out on loan</h3>' + loans);
+    }
+
+    /* ================= inventory (FR-24) ================= */
+
+    function viewInventory() {
+      return section('inventory', { load: function () { return call('inventory', { labId: S.lab }); }, html: function (list) {
+        return card('Inventory', list.length ? table(['ID', 'Name', 'Category', 'Type', 'Status', 'Condition', 'Location', 'Map', ''], list.map(function (a) {
+          return [esc(a.asset_id), esc(a.name), esc(a.category), esc(a.type), assetBadge(a.status), esc(a.condition), esc(a.location),
+            a.map_x !== '' && a.map_y !== '' ? esc(a.map_x + ',' + a.map_y) : '—',
+            '<div class="flex gap-1"><button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="asset-edit" data-id="' + esc(a.asset_id) + '">Edit</button>' +
+            '<button class="lp-btn lp-btn-danger lp-btn-sm" data-act="asset-remove" data-id="' + esc(a.asset_id) + '">Remove</button></div>'];
+        })) : empty('No items in this lab yet.'), '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="asset-edit">Add item</button>');
+      } });
+    }
+
+    function assetForm(a) {
+      a = a || { category: 'IOT', condition: 'GOOD' };
+      var lab = curLab();
+      return (a.asset_id ? '<input type="hidden" name="asset_id" value="' + esc(a.asset_id) + '">' : field('Asset ID (optional, e.g. ESP-06)', input('asset_id', '', 'placeholder="auto-generated if empty"'))) +
+        field('Name', input('name', a.name, 'required')) +
+        '<div class="grid grid-cols-2 gap-3">' + field('Category', select('category', [['GPU', 'GPU workstation'], ['IOT', 'IoT hardware'], ['SENSOR', 'Sensor']], a.category)) +
+        field('Type', input('type', a.type, 'required list="asset-types" placeholder="ESP32"')) + '</div>' +
+        '<datalist id="asset-types"><option>RTX 4090</option><option>A100</option><option>ESP32</option><option>Raspberry Pi</option><option>LoRaWAN Gateway</option><option>Ultrasonic</option><option>Thermal</option><option>LiDAR</option><option>Gas</option></datalist>' +
+        '<div class="grid grid-cols-2 gap-3">' + field('Condition', select('condition', ['GOOD', 'FAIR', 'DAMAGED'], a.condition)) +
+        (a.asset_id ? field('Status', select('status', [[a.status, a.status + ' (current)']].concat(a.status === 'AVAILABLE' ? [['MAINTENANCE', 'MAINTENANCE']] : a.status === 'MAINTENANCE' ? [['AVAILABLE', 'AVAILABLE']] : []), a.status)) : '<div></div>') + '</div>' +
+        field('Location label', input('location', a.location, 'placeholder="Bench A"')) +
+        '<div class="grid grid-cols-2 gap-3">' + field('Map column (0–' + (lab.map_cols - 1) + ')', input('map_x', a.map_x, 'inputmode="numeric"')) +
+        field('Map row (0–' + (lab.map_rows - 1) + ')', input('map_y', a.map_y, 'inputmode="numeric"')) + '</div>' +
+        field('Notes', input('notes', a.notes)) +
+        (a.asset_id ? field('Reason (required if you change the status)', input('reason', '')) : '');
+    }
+
+    /* ================= courses & events ================= */
+
+    function viewCourses() {
+      return section('courses', { load: function () { return call('sessions', { labId: S.lab }); }, html: function (list) {
+        S.sections.courses.list = list;
+        return card('Courses & events', list.length ? table(['Type', 'Code', 'Name', 'Coordinator', 'Schedule', 'Enrolled', 'Active', ''], list.map(function (s) {
+          return [esc(s.type), esc(s.code), esc(s.name), esc(s.coordinator_name || s.coordinator_email),
+            esc(s.type === 'COURSE' ? s.days + ' ' + s.start_time + '–' + s.end_time : s.start_date + ' → ' + s.end_date + (s.start_time ? ' ' + s.start_time + '–' + s.end_time : '')),
+            s.enrolled.length, s.active ? badge('green', 'Active') : badge('gray', 'Inactive'),
+            '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="course-edit" data-id="' + esc(s.id) + '">Edit</button>'];
+        })) : empty('No courses or events yet.'), '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="course-edit">Add</button>');
+      } });
+    }
+
+    function courseForm(s) {
+      s = s || { type: 'COURSE', active: true, enrolled: [] };
+      return (s.id ? '<input type="hidden" name="id" value="' + esc(s.id) + '">' : '') +
+        '<div class="grid grid-cols-2 gap-3">' + field('Type', select('type', [['COURSE', 'Lab course'], ['EVENT', 'Event / workshop']], s.type)) + field('Code', input('code', s.code, 'placeholder="23CS2048"')) + '</div>' +
+        field('Name', input('name', s.name, 'required')) +
+        '<div class="grid grid-cols-2 gap-3">' + field('Coordinator email', input('coordinator_email', s.coordinator_email, 'type="email" required')) + field('Coordinator name', input('coordinator_name', s.coordinator_name)) + '</div>' +
+        field('Days (courses), e.g. MON,WED', input('days', s.days)) +
+        '<div class="grid grid-cols-3 gap-3">' + field('Start', input('start_time', s.start_time, 'type="time"')) + field('End', input('end_time', s.end_time, 'type="time"')) + field('Hours', input('session_hours', s.session_hours, 'inputmode="decimal"')) + '</div>' +
+        '<div class="grid grid-cols-2 gap-3">' + field('From date', input('start_date', s.start_date, 'type="date"')) + field('To date', input('end_date', s.end_date, 'type="date"')) + '</div>' +
+        field('Enrolled students (emails, one per line)', '<textarea class="lp-input" name="enrolled" rows="4">' + esc(s.enrolled.join('\n')) + '</textarea>') +
+        '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active"' + (s.active ? ' checked' : '') + '> Active</label>';
+    }
+
+    /* ================= reports (FR-29 – FR-33) ================= */
+
+    function viewReports() {
+      if (!can('reportDaily')) S.report.kind = 'export';
+      var k = S.report.kind;
+      var sub = function (id, label) { return '<button class="lp-btn lp-btn-sm ' + (k === id ? 'lp-btn-primary' : 'lp-btn-ghost') + '" data-act="report-kind" data-kind="' + id + '">' + label + '</button>'; };
+      var controls = k === 'daily' ? field('Date', input('date', S.report.date || todayKey(), 'type="date" id="rep-date"'))
+        : k === 'monthly' ? field('Month', input('month', S.report.month || monthKey(), 'type="month" id="rep-month"'))
+        : '<div class="grid grid-cols-2 gap-3">' + field('From', input('from', S.report.from || todayKey(), 'type="date" id="rep-from"')) + field('To', input('to', S.report.to || todayKey(), 'type="date" id="rep-to"')) + '</div>' +
+          (k === 'export' ? field('Dataset', select('dataset', [['visits', 'Visits (attendance)'], ['loans', 'Equipment loans']], S.report.dataset || 'visits', 'id="rep-dataset"')) : '');
+      var buttons = k === 'export'
+        ? '<button class="lp-btn lp-btn-primary" data-act="export-csv">Download CSV</button><button class="lp-btn lp-btn-ghost" data-act="export-xlsx">Download Excel (.xlsx)</button><button class="lp-btn lp-btn-ghost" data-act="export-drive">Save CSV to Drive</button>'
+        : (can('reportDaily') ? '<button class="lp-btn lp-btn-primary" data-act="report-run">Show report</button><button class="lp-btn lp-btn-ghost" data-act="report-pdf">Save PDF to Drive</button>' : '') +
+          (k === 'daily' && can('emailDigest') ? '<button class="lp-btn lp-btn-ghost" data-act="report-email">Email digest now</button>' : '');
+      return '<div class="flex flex-wrap gap-2">' + (can('reportDaily') ? sub('daily', 'Daily digest') + sub('monthly', 'Monthly audit') + sub('range', 'Date range') : '') + (can('exportRange') ? sub('export', 'CSV export') : '') + '</div>' +
+        card(k === 'export' ? 'ERP-ready export (CSV / Excel)' : 'Report', '<div class="max-w-md space-y-3">' + controls + '</div><div class="flex flex-wrap gap-2 mt-4">' + buttons + '</div>' +
+          (k === 'export' ? '<p class="text-xs text-slate-500 mt-3">One flat table, fixed column names, ISO 8601 dates with the +05:30 offset. Mobile numbers are never exported.' + (role() === 'FACULTY' ? ' You can export visits to your own sessions only.' : '') + '</p>' : '')) +
+        '<div id="report-out"></div>';
+    }
+
+    function reportParams() {
+      var k = S.report.kind;
+      var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+      if (k === 'daily') S.report.date = v('rep-date');
+      if (k === 'monthly') S.report.month = v('rep-month');
+      if (k === 'range' || k === 'export') { S.report.from = v('rep-from'); S.report.to = v('rep-to'); }
+      if (k === 'export') S.report.dataset = v('rep-dataset');
+      return { labId: S.lab, kind: k, date: S.report.date, month: S.report.month, from: S.report.from, to: S.report.to, dataset: S.report.dataset };
+    }
+
+    function htmlReport(r) {
+      var kpis = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3">' + r.kpis.map(function (k) {
+        return '<div class="lp-card p-3"><div class="text-xs text-slate-500 font-semibold">' + esc(k[0]) + '</div><div class="text-lg font-bold">' + esc(k[1]) + '</div></div>';
+      }).join('') + '</div>';
+      return '<div class="space-y-4"><div><h2 class="text-lg font-bold">' + esc(r.title) + '</h2><p class="text-sm text-slate-500">' + esc(r.subtitle) + '</p></div>' + kpis +
+        r.sections.map(function (s) {
+          return card(esc(s.heading), (s.rows.length ? table(s.columns, s.rows.map(function (row) { return row.map(esc); })) : empty('No records for this period.')) +
+            (s.note ? '<p class="text-xs text-slate-500 mt-2">' + esc(s.note) + '</p>' : ''));
+        }).join('') + '</div>';
+    }
+
+    /* ================= admin (FR-35, FR-36) ================= */
+
+    function viewSettings() {
+      return section('settings', { load: function () { return call('settingsGet'); }, html: function (d) {
+        S.sections.settings.cfg = d;
+        var lab = d.labs.filter(function (l) { return l.lab_id === S.lab; })[0] || d.labs[0] || {};
+        var g = d.global;
+        var labForm = '<form id="lab-form" class="space-y-3">' +
+          '<div class="grid sm:grid-cols-2 gap-3">' + field('Lab ID', input('lab_id', lab.lab_id, 'required' + (lab.lab_id ? ' readonly' : ''))) + field('Lab name', input('name', lab.name, 'required')) + '</div>' +
+          '<div class="grid sm:grid-cols-3 gap-3 items-end">' + field('Latitude', input('lat', lab.lat, 'inputmode="decimal" required id="f-lat"')) + field('Longitude', input('lng', lab.lng, 'inputmode="decimal" required id="f-lng"')) +
+          '<button type="button" class="lp-btn lp-btn-ghost" data-act="use-location">Use my current location</button></div><p id="loc-help" class="text-xs text-slate-500">Stand in the centre of the lab and tap the button. Check the accuracy shown before saving.</p>' +
+          '<div class="grid sm:grid-cols-4 gap-3">' + field('Radius (m, ' + d.limits.radius.join('–') + ')', input('radius_m', lab.radius_m, 'type="number" min="' + d.limits.radius[0] + '" max="' + d.limits.radius[1] + '"')) +
+          field('Opens', input('open_time', lab.open_time, 'type="time"')) + field('Closes', input('close_time', lab.close_time, 'type="time"')) + field('Open days', input('open_days', lab.open_days)) + '</div>' +
+          '<div class="grid sm:grid-cols-4 gap-3">' + field('GPS accuracy limit (m)', input('accuracy_limit_m', lab.accuracy_limit_m, 'type="number"')) + field('Amber margin (m)', input('amber_margin_m', lab.amber_margin_m, 'type="number"')) +
+          field('Speed flag (km/h)', input('speed_flag_kmh', lab.speed_flag_kmh, 'type="number"')) + field('Speed block (km/h)', input('speed_block_kmh', lab.speed_block_kmh, 'type="number"')) + '</div>' +
+          '<div class="grid sm:grid-cols-4 gap-3">' + field('QR rotation (s, ' + d.limits.rotate.join('–') + ')', input('qr_rotate_sec', lab.qr_rotate_sec, 'type="number"')) + field('Grace after session (min)', input('grace_min', lab.grace_min, 'type="number"')) +
+          field('Map columns', input('map_cols', lab.map_cols, 'type="number"')) + field('Map rows', input('map_rows', lab.map_rows, 'type="number"')) + '</div>' +
+          field('Lab in-charge email (daily digest)', input('incharge_email', lab.incharge_email, 'type="email"')) +
+          '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active"' + (lab.active !== false ? ' checked' : '') + '> Lab active</label>' +
+          '<div class="flex gap-2"><button class="lp-btn lp-btn-primary">Save lab settings</button><button type="button" class="lp-btn lp-btn-ghost" data-act="new-lab">Add another lab</button></div></form>';
+
+        var monitorUrl = BOOT.webAppUrl + '?view=monitor&lab=' + encodeURIComponent(lab.lab_id || '');
+        var globalForm = '<form id="global-form" class="space-y-3">' +
+          '<div class="grid sm:grid-cols-3 gap-3">' + field('Default loan (h)', input('default_loan_hours', g.default_loan_hours, 'type="number"')) + field('Max loan (h)', input('max_loan_hours', g.max_loan_hours, 'type="number"')) +
+          field('Max open requests / student', input('max_open_requests', g.max_open_requests, 'type="number"')) + '</div>' +
+          '<div class="grid sm:grid-cols-3 gap-3">' + field('Request expires after (h)', input('request_expiry_hours', g.request_expiry_hours, 'type="number"')) + field('Overdue reminder every (h)', input('reminder_every_hours', g.reminder_every_hours, 'type="number"')) +
+          field('Dashboard refresh (ms, 5000–10000)', input('dashboard_poll_ms', g.dashboard_poll_ms, 'type="number"')) + '</div>' +
+          field('Monitor refresh (ms, 1000–5000)', input('monitor_poll_ms', g.monitor_poll_ms, 'type="number"')) +
+          field('Extra digest recipients (emails)', '<textarea class="lp-input" name="report_recipients" rows="2">' + esc(g.report_recipients.join('\n')) + '</textarea>') +
+          field('Test accounts allowed outside the institutional domains (leave empty in production)', '<textarea class="lp-input" name="extra_allowed_emails" rows="2">' + esc(g.extra_allowed_emails.join('\n')) + '</textarea>') +
+          '<button class="lp-btn lp-btn-primary">Save system settings</button></form>';
+
+        var roles = ['STUDENT', 'FACULTY', 'STAFF'];
+        var perms = '<form id="perm-form">' + table(['Action', 'Student', 'Faculty', 'Lab staff'], d.permissions.map(function (p) {
+          return ['<code class="text-xs">' + esc(p.action) + '</code>'].concat(roles.map(function (r) {
+            var def = p.defaults.indexOf(r) !== -1;
+            return '<input type="checkbox" name="' + esc(p.action + '|' + r) + '"' + (def || p.extra.indexOf(r) !== -1 ? ' checked' : '') + (def ? ' disabled title="Granted by default"' : '') + '>';
+          }));
+        })) + '<p class="text-xs text-slate-500 mt-2">Greyed boxes are built-in defaults. Super Admin always has every permission. Administrative actions cannot be delegated.</p>' +
+          '<button class="lp-btn lp-btn-primary mt-3">Save permissions</button></form>';
+
+        var jobs = '<div class="flex flex-wrap gap-2">' + [['reconcile', 'Reconcile occupancy'], ['autoClose', 'Run auto-close'], ['overdue', 'Run overdue check'], ['digest', 'Send daily digests'], ['backup', 'Back up spreadsheet']].map(function (j) {
+          return '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="run-job" data-job="' + j[0] + '">' + j[1] + '</button>';
+        }).join('') + '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="install-triggers">Install background triggers</button></div>';
+
+        return '<div class="grid xl:grid-cols-2 gap-4 items-start">' + card('Lab settings', labForm) +
+          '<div class="space-y-4">' + card('Lab monitor', '<p class="text-sm text-slate-600 mb-2">Open this on the lab’s wall display while signed in as lab staff:</p><a class="text-teal-700 underline break-all text-sm" target="_blank" href="' + esc(monitorUrl) + '">' + esc(monitorUrl) + '</a>') +
+          card('Background jobs', jobs) + card('System settings', globalForm) + '</div>' + '</div>' + card('Role permissions', perms);
+      } });
+    }
+
+    function viewPeople() {
+      return section('people', { load: function () { return call('users'); }, html: function (list) {
+        var roles = [['STUDENT', 'Student'], ['FACULTY', 'Faculty'], ['STAFF', 'Lab staff'], ['SUPER_ADMIN', 'Super Admin']];
+        return card('People', '<form id="user-add" class="flex flex-wrap gap-2 items-end mb-4"><div class="flex-1 min-w-[14rem]">' + field('Add or update by email', input('email', '', 'type="email" required placeholder="name@karunya.edu"')) + '</div>' +
+          '<div>' + field('Role', select('role', roles, 'FACULTY')) + '</div><button class="lp-btn lp-btn-primary">Save</button></form>' +
+          table(['Name', 'Email', 'ID', 'Mobile', 'Role', 'Active'], list.map(function (u) {
+            return [esc(u.name || '—'), esc(u.email), esc(u.reg_no), esc(u.mobile), select('role', roles, u.role, 'data-user-role="' + esc(u.email) + '"'),
+              '<input type="checkbox" data-user-active="' + esc(u.email) + '"' + (u.active ? ' checked' : '') + '>'];
+          })) + '<p class="text-xs text-slate-500 mt-2">Every role change is written to the audit log.</p>');
+      } });
+    }
+
+    function viewAudit() {
+      var f = S.auditFilter || { securityOnly: false };
+      return card('Audit log', '<form id="audit-form" class="grid sm:grid-cols-5 gap-3 items-end">' + field('Actor', input('actor', f.actor, 'placeholder="email contains"')) +
+        field('Action', input('action', f.action, 'placeholder="e.g. ROLE_CHANGE"')) + field('From', input('from', f.from, 'type="date"')) + field('To', input('to', f.to, 'type="date"')) +
+        '<label class="flex items-center gap-2 text-sm pb-2"><input type="checkbox" name="securityOnly"' + (f.securityOnly ? ' checked' : '') + '> Security events only</label>' +
+        '<button class="lp-btn lp-btn-primary sm:col-span-5 sm:w-max">Filter</button></form>') +
+        section('audit', { load: function () { return call('audit', f); }, html: function (rows) {
+          return card('', rows.length ? table(['Time', 'Actor', 'Role', 'Action', 'Target', 'Outcome', 'Reason', 'Lab'], rows.map(function (e) {
+            return [fmtDT(e.timestamp), esc(e.actor), esc(e.role), (e.action.indexOf('SECURITY_') === 0 ? badge('red', e.action) : '<code class="text-xs">' + esc(e.action) + '</code>'), esc(e.target), esc(e.outcome), esc(e.reason), esc(e.lab_id)];
+          })) : empty('No matching events.'));
+        } });
+    }
+
+    /* ================= actions ================= */
+
+    function reloadVisible() { S.active.forEach(loadSection); }
+
+    var ACTIONS = {
+      'tab': function (d) { S.tab = d.tab; render(); window.scrollTo(0, 0); },
+      'reload-sections': reloadVisible,
+      'modal-close': closeModal,
+      'modal-backdrop': function (d, el, ev) { if (ev.target === el) closeModal(); },
+
+      'scan-help': function () {
+        openModal('Check in', '<ol class="list-decimal pl-5 space-y-2 text-sm text-slate-700"><li>Open your phone’s normal camera app.</li><li>Point it at the QR code on the lab monitor.</li><li>Tap the link that appears. LabPulse opens already signed in.</li><li>Allow location once, pick why you are here, and tap <b>Check in</b>.</li></ol>' +
+          '<p class="text-xs text-slate-500 mt-3">The code changes every few seconds and works once, so a photo of it will not work later.</p>');
+      },
+      'resume-checkin': function (d) { startCheckin({ ok: true, labId: d.lab, labName: d.name, expiresInSec: Number(d.exp) }); },
+      'checkout': function (d, el) {
+        el.disabled = true;
+        call('checkOut', { requestId: rid() }).then(function (r) {
+          toast('Checked out after ' + dur(r.visit.duration_ms) + '.');
+          reloadVisible();
+          refreshOcc();
+        }, function (e) { toast(e.message, 'error'); el.disabled = false; });
+      },
+      'request-asset': function () {
+        var labId = studentLab();
+        call('assetsPublic', { labId: labId }).then(function (list) {
+          var free = list.filter(function (a) { return a.status === 'AVAILABLE'; });
+          if (!free.length) return toast('Nothing is free right now.', 'warn');
+          openModal('Request equipment',
+            field('Item', select('assetId', free.map(function (a) { return [a.asset_id, a.type + ' — ' + a.name + (a.location ? ' (' + a.location + ')' : '')]; }), '')) +
+            field('For how many hours?', input('hours', S.init.defaultLoanHours, 'type="number" min="1" max="' + S.init.maxLoanHours + '"')) +
+            field('Note for lab staff (optional)', input('note', '')) +
+            '<p class="text-xs text-slate-500">The item is held for you. Collect it from lab staff, who confirm the handover.</p>',
+            function (v) { return call('requestAsset', v).then(function () { toast('Requested. Collect it from lab staff.'); reloadVisible(); }); }, 'Request');
+        }, function (e) { toast(e.message, 'error'); });
+      },
+      'cancel-request': function (d) {
+        call('cancelRequest', { requestId: d.id }).then(function () { toast('Request cancelled.'); reloadVisible(); }, function (e) { toast(e.message, 'error'); });
+      },
+      'passport': function (d, el) {
+        el.disabled = true;
+        el.innerHTML = '<span class="lp-spin"></span> Generating…';
+        call('myPassport').then(function (f) {
+          el.outerHTML = '<a class="lp-btn lp-btn-primary" target="_blank" href="' + esc(f.url) + '">Open ' + esc(f.name) + '</a>';
+        }, function (e) { toast(e.message, 'error'); el.disabled = false; el.textContent = 'Generate my Lab Passport'; });
+      },
+
+      'loc-retry': function () { startLocation(); },
+      'ci-type': function (d) {
+        var r = S.checkin.reason;
+        r.type = d.type;
+        if (d.type !== 'COURSE' && d.type !== 'EVENT') r.sessionId = '';
+        else {
+          var list = S.checkin.options ? (d.type === 'COURSE' ? S.checkin.options.courses : S.checkin.options.events) : [];
+          r.sessionId = list.length === 1 ? list[0].id : list.some(function (s) { return s.id === r.sessionId; }) ? r.sessionId : '';
+          // Nothing scheduled: go straight to typing the course/event details.
+          r.manual = !!S.checkin.options && !list.length;
+        }
+        renderCheckin();
+      },
+      'ci-session': function (d) { S.checkin.reason.sessionId = d.id; renderCheckin(); },
+      'ci-manual': function () {
+        var r = S.checkin.reason;
+        r.manual = !r.manual;
+        if (r.manual) r.sessionId = '';
+        renderCheckin();
+      },
+      'ci-equip': function (d) {
+        var r = S.checkin.reason;
+        var i = r.equip.indexOf(d.type);
+        if (d.type === 'None') r.equip = i === -1 ? ['None'] : [];
+        else {
+          r.equip = r.equip.filter(function (x) { return x !== 'None'; });
+          if (i === -1) r.equip.push(d.type);
+          else r.equip.splice(r.equip.indexOf(d.type), 1);
+        }
+        renderCheckin();
+      },
+      'ci-submit': submitCheckin,
+      'ci-done': function () {
+        S.checkin = null;
+        S.tab = null;
+        render();
+      },
+
+      'pick-session': function (d) { S.roster.sessionId = d.id; paintSection('fsessions'); loadSection('roster'); },
+      'mark': function (d) {
+        openModal('Mark ' + d.name + ' ' + d.mark.toLowerCase(), field('Reason (required, audit-logged)', input('reason', '', 'required')), function (v) {
+          return call('markAttendance', { sessionId: S.roster.sessionId, date: S.roster.date || todayKey(), email: d.email, mark: d.mark, reason: v.reason }).then(function () {
+            toast('Marked ' + d.mark.toLowerCase() + '.');
+            loadSection('roster');
+          });
+        }, 'Save mark');
+      },
+      'session-csv': function () {
+        var date = S.roster.date || todayKey();
+        call('exportRange', { labId: S.lab, from: date, to: date, sessionId: S.roster.sessionId }).then(function (r) {
+          download(r.filename, r.csv);
+          toast('Exported ' + r.rows + ' rows.');
+        }, function (e) { toast(e.message, 'error'); });
+      },
+      'session-pdf': function (d, el) {
+        el.disabled = true;
+        call('sessionLogPdf', { sessionId: S.roster.sessionId, date: S.roster.date || todayKey() }).then(function (f) {
+          el.disabled = false;
+          window.open(f.url, '_blank');
+        }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+      'review': function (d, el) {
+        var go = function (note) {
+          return call('reviewVisit', { visitId: d.id, decision: d.decision, note: note || '' }).then(function () {
+            toast(d.decision === 'CONFIRM' ? 'Confirmed.' : 'Declined; the visit was voided.');
+            reloadVisible();
+            refreshOcc();
+          });
+        };
+        if (d.decision === 'CONFIRM') {
+          el.disabled = true;
+          go().catch(function (e) { el.disabled = false; toast(e.message, 'error'); });
+        } else {
+          openModal('Decline ' + d.name + '’s check-in?', '<p class="text-sm text-slate-600">The visit will be voided and the decision logged.</p>' + field('Reason', input('note', '', 'placeholder="e.g. Not present in the lab"')), function (v) { return go(v.note); }, 'Decline');
+        }
+      },
+
+      'force-out': function (d) {
+        openModal('Check out ' + d.name, field('Reason (audit-logged)', input('why', '', 'required placeholder="e.g. Left without checking out"')), function (v) {
+          return call('forceCheckOut', { visitId: d.id, why: v.why }).then(function () { toast('Checked out.'); reloadVisible(); refreshOcc(); });
+        }, 'Check out');
+      },
+      'manual-entry': function () {
+        call('sessions', { labId: S.lab }).then(function (sessions) {
+          var active = sessions.filter(function (s) { return s.active; });
+          openModal('Supervised manual entry',
+            '<p class="text-sm text-slate-600">For students who cannot share location, or entries outside operating hours. Every manual entry is audit-logged with your name.</p>' +
+            field('Student email', input('email', '', 'type="email" required')) +
+            field('Reason for visit', select('type', [['RESEARCH', 'Individual research']].concat(active.map(function (s) { return [s.type + ':' + s.id, (s.code ? s.code + ' · ' : '') + s.name]; })), 'RESEARCH')) +
+            field('Purpose (for research)', input('purpose', '')) +
+            field('Why a manual entry?', input('why', '', 'required placeholder="e.g. Location permission blocked on phone"')),
+            function (v) {
+              var parts = v.type.split(':');
+              var reason = parts.length === 2 ? { type: parts[0], sessionId: parts[1] } : { type: 'RESEARCH', purpose: v.purpose || 'Supervised entry', equipment: 'As required' };
+              return call('manualEntry', { email: v.email, labId: S.lab, reason: reason, why: v.why }).then(function () { toast('Manual entry recorded.'); reloadVisible(); refreshOcc(); });
+            }, 'Check in');
+        }, function (e) { toast(e.message, 'error'); });
+      },
+      'issue': function (d) {
+        openModal('Confirm handover: ' + d.name, '<p class="text-sm text-slate-600">Hand the item to <b>' + esc(d.who) + '</b>, then confirm.</p>' +
+          field('Due back', input('dueAt', toLocalInput(d.due), 'type="datetime-local" required')) +
+          field('Condition at issue', select('condition', ['GOOD', 'FAIR', 'DAMAGED'], 'GOOD')),
+          function (v) {
+            return call('issueAsset', { requestId: d.id, dueAt: fromLocalInput(v.dueAt), condition: v.condition }).then(function () { toast('Issued.'); reloadVisible(); });
+          }, 'Confirm issue');
+      },
+      'reject': function (d) {
+        openModal('Reject request', field('Reason', input('reason', '', 'placeholder="e.g. Reserved for a lab course"')), function (v) {
+          return call('rejectRequest', { requestId: d.id, reason: v.reason }).then(function () { toast('Rejected.'); reloadVisible(); });
+        }, 'Reject');
+      },
+      'return': function (d) {
+        openModal('Mark returned: ' + d.name, field('Condition on return', select('condition', ['GOOD', 'FAIR', 'DAMAGED'], 'GOOD')) + field('Notes', input('notes', '')) +
+          '<p class="text-xs text-slate-500">Damaged items move to maintenance and leave the available list.</p>', function (v) {
+          return call('returnAsset', { loanId: d.id, condition: v.condition, notes: v.notes }).then(function () { toast('Return recorded.'); reloadVisible(); });
+        }, 'Record return');
+      },
+
+      'asset-edit': function (d) {
+        var list = (S.sections.inventory && S.sections.inventory.data) || [];
+        var a = d.id ? list.filter(function (x) { return x.asset_id === d.id; })[0] : null;
+        openModal(a ? 'Edit ' + a.asset_id : 'Add inventory item', assetForm(a), function (v) {
+          v.lab_id = S.lab;
+          return call('inventorySave', v).then(function () { toast('Saved.'); loadSection('inventory'); });
+        });
+      },
+      'asset-remove': function (d) {
+        openModal('Remove ' + d.id + '?', '<p class="text-sm text-slate-600">The item leaves the catalog. Its history stays in reports and the audit log.</p>' + field('Reason', input('reason', '', 'required')), function (v) {
+          return call('inventoryRemove', { assetId: d.id, reason: v.reason }).then(function () { toast('Removed.'); loadSection('inventory'); });
+        }, 'Remove');
+      },
+      'course-edit': function (d) {
+        var list = (S.sections.courses && S.sections.courses.data) || [];
+        var s = d.id ? list.filter(function (x) { return x.id === d.id; })[0] : null;
+        openModal(s ? 'Edit ' + (s.code || s.name) : 'Add course or event', courseForm(s), function (v) {
+          v.lab_id = S.lab;
+          return call('sessionSave', v).then(function () { toast('Saved.'); loadSection('courses'); });
+        });
+      },
+
+      'report-kind': function (d) { S.report.kind = d.kind; render(); },
+      'report-run': function (d, el) {
+        var out = document.getElementById('report-out');
+        out.innerHTML = skeleton(200);
+        call(S.report.kind === 'daily' ? 'reportDaily' : 'reportPeriod', reportParams()).then(function (r) { out.innerHTML = htmlReport(r); }, function (e) { out.innerHTML = errorBox(e); });
+      },
+      'report-pdf': function (d, el) {
+        el.disabled = true;
+        el.innerHTML = '<span class="lp-spin"></span> Building PDF…';
+        call('reportPdf', reportParams()).then(function (f) {
+          el.disabled = false;
+          el.textContent = 'Save PDF to Drive';
+          document.getElementById('report-out').insertAdjacentHTML('afterbegin', '<div class="lp-card p-3 mb-3 text-sm">Saved: <a class="text-teal-700 underline" target="_blank" href="' + esc(f.url) + '">' + esc(f.name) + '</a></div>');
+        }, function (e) { el.disabled = false; el.textContent = 'Save PDF to Drive'; toast(e.message, 'error'); });
+      },
+      'report-email': function (d, el) {
+        el.disabled = true;
+        call('emailDigest', reportParams()).then(function (r) { el.disabled = false; toast('Digest emailed to ' + r.recipients + ' recipient(s).'); }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+      'export-csv': function (d, el) {
+        el.disabled = true;
+        call('exportRange', reportParams()).then(function (r) { el.disabled = false; download(r.filename, r.csv); toast('Exported ' + r.rows + ' rows.'); }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+      'export-xlsx': function (d, el) {
+        el.disabled = true;
+        var p = reportParams();
+        p.format = 'xlsx';
+        call('exportRange', p).then(function (r) {
+          el.disabled = false;
+          document.getElementById('report-out').innerHTML = '<div class="lp-card p-3 text-sm">Excel file with ' + r.rows + ' rows: <a class="text-teal-700 underline" target="_blank" href="' + esc(r.file.url) + '">' + esc(r.file.name) + '</a></div>';
+        }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+      'export-drive': function (d, el) {
+        el.disabled = true;
+        var p = reportParams();
+        p.saveToDrive = true;
+        call('exportRange', p).then(function (r) {
+          el.disabled = false;
+          document.getElementById('report-out').innerHTML = '<div class="lp-card p-3 text-sm">Saved ' + r.rows + ' rows: <a class="text-teal-700 underline" target="_blank" href="' + esc(r.file.url) + '">' + esc(r.file.name) + '</a></div>';
+        }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+
+      'use-location': function () {
+        var help = document.getElementById('loc-help');
+        if (!navigator.geolocation) return toast('This browser cannot share location.', 'error');
+        help.textContent = 'Getting location…';
+        navigator.geolocation.getCurrentPosition(function (p) {
+          document.getElementById('f-lat').value = p.coords.latitude.toFixed(6);
+          document.getElementById('f-lng').value = p.coords.longitude.toFixed(6);
+          help.textContent = 'Filled from this device (accuracy ±' + Math.round(p.coords.accuracy) + ' m). Save to apply.' + (p.coords.accuracy > 20 ? ' Accuracy is poor; try again near a window.' : '');
+        }, function (e) { help.textContent = 'Could not get a location: ' + e.message; }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+      },
+      'new-lab': function () {
+        var cfg = S.sections.settings.cfg;
+        cfg.labs.push({ lab_id: '', name: '', lat: '', lng: '', radius_m: 20, open_time: '08:00', close_time: '20:00', open_days: 'MON,TUE,WED,THU,FRI,SAT', accuracy_limit_m: 30, amber_margin_m: 30, speed_flag_kmh: 25, speed_block_kmh: 200, qr_rotate_sec: 8, grace_min: 15, map_cols: 8, map_rows: 5, incharge_email: '', active: true });
+        S.lab = '';
+        paintSection('settings');
+      },
+      'run-job': function (d, el) {
+        el.disabled = true;
+        call('runJob', { job: d.job }).then(function (r) { el.disabled = false; toast('Done: ' + JSON.stringify(r).slice(0, 120)); }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+      'install-triggers': function (d, el) {
+        el.disabled = true;
+        call('installTriggers').then(function () { el.disabled = false; toast('Background triggers installed.'); }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      }
+    };
+
+    document.addEventListener('click', function (ev) {
+      var el = ev.target.closest('[data-act]');
+      if (!el) return;
+      var fn = ACTIONS[el.getAttribute('data-act')];
+      if (!fn) return;
+      if (el.tagName === 'BUTTON' && el.type !== 'submit') ev.preventDefault();
+      fn(el.dataset, el, ev);
+    });
+
+    document.addEventListener('input', function (ev) {
+      var bind = ev.target.getAttribute('data-bind');
+      if (bind && S.checkin) {
+        S.checkin.reason[bind] = ev.target.value;
+        paintSubmit();
+      }
+    });
+
+    document.addEventListener('change', function (ev) {
+      var t = ev.target;
+      if (t.id === 'lab-select') {
+        S.lab = t.value;
+        S.roster.sessionId = null;
+        S.occ = null;
+        render();
+        refreshOcc();
+      } else if (t.id === 'roster-date') {
+        S.roster.date = t.value;
+        loadSection('roster');
+      } else if (t.hasAttribute('data-user-role') || t.hasAttribute('data-user-active')) {
+        var email = t.getAttribute('data-user-role') || t.getAttribute('data-user-active');
+        var row = t.closest('tr');
+        var roleSel = row.querySelector('[data-user-role]');
+        var active = row.querySelector('[data-user-active]');
+        call('saveUser', { email: email, role: roleSel.value, active: active.checked }).then(function () { toast('Updated ' + email + '.'); }, function (e) { toast(e.message, 'error'); loadSection('people'); });
+      }
+    });
+
+    document.addEventListener('submit', function (ev) {
+      var f = ev.target;
+      if (f.id === 'lab-form') {
+        ev.preventDefault();
+        call('saveLab', formData(f)).then(function (lab) {
+          toast('Lab settings saved.');
+          S.lab = lab.lab_id;
+          return call('bootstrap').then(function (init) { S.init = init; render(); });
+        }, function (e) { toast(e.message, 'error'); });
+      } else if (f.id === 'global-form') {
+        ev.preventDefault();
+        call('saveGlobal', formData(f)).then(function () { toast('System settings saved.'); }, function (e) { toast(e.message, 'error'); });
+      } else if (f.id === 'perm-form') {
+        ev.preventDefault();
+        var overrides = {};
+        Array.prototype.forEach.call(f.querySelectorAll('input[type=checkbox]:checked:not(:disabled)'), function (cb) {
+          var p = cb.name.split('|');
+          (overrides[p[0]] = overrides[p[0]] || []).push(p[1]);
+        });
+        call('savePermissions', { overrides: overrides }).then(function () { toast('Permissions saved.'); }, function (e) { toast(e.message, 'error'); });
+      } else if (f.id === 'user-add') {
+        ev.preventDefault();
+        call('saveUser', formData(f)).then(function () { toast('Saved.'); loadSection('people'); }, function (e) { toast(e.message, 'error'); });
+      } else if (f.id === 'audit-form') {
+        ev.preventDefault();
+        S.auditFilter = formData(f);
+        render();
+      }
+    });
+
+    /* ================= live refresh (FR-14) ================= */
+
+    function paintOcc() {
+      var el = document.getElementById('occ-pill');
+      if (el) el.innerHTML = occPill();
+    }
+    function refreshOcc() {
+      var lab = role() === 'STUDENT' ? studentLab() : S.lab;
+      if (!lab) return;
+      call('occupancy', { labId: lab }).then(function (r) { S.occ = r.occupancy; S.occPending = r.pending; paintOcc(); }, function () {});
+    }
+    function tick() {
+      if (document.hidden || S.checkin || !S.init || !S.init.me.registered) return;
+      refreshOcc();
+      S.active.forEach(function (id) {
+        if (S.sections[id] && S.sections[id].live) loadSection(id);
+      });
+    }
+
+    function afterInit() {
+      S.lab = S.lab || (S.init.labs[0] && S.init.labs[0].lab_id) || null;
+      if (BOOT.view === 'checkin' && BOOT.claim && S.init.me.registered && !S._claimShown) {
+        S._claimShown = true;
+        startCheckin(BOOT.claim);
+      } else {
+        render();
+      }
+      refreshOcc();
+    }
+
+    if (BOOT.error || !S.init) {
+      renderFatal(BOOT.error || { message: 'LabPulse could not start.' });
+    } else {
+      afterInit();
+      setInterval(tick, Math.max(5000, Math.min(10000, S.init.pollMs || 8000)));
+      document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+    }
+  })();
+</script>

@@ -1,0 +1,9 @@
+# Normalise text files to LF in the repository
+* text=auto eol=lf
+
+# Never touch line endings in binary files
+*.pdf binary
+*.png binary
+*.jpg binary
+*.xlsx binary
+*.docx binary

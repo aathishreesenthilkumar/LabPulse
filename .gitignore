@@ -1,0 +1,28 @@
+# Dependencies (restore with `npm install`)
+node_modules/
+
+# Apps Script / clasp: project link and login credentials are personal
+.clasp.json
+.clasprc.json
+
+# Secrets and local environment
+.env
+.env.*
+*.pem
+*.key
+
+# Python build artefacts (docs/build_srs.py)
+__pycache__/
+*.pyc
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+*.tmp
+
+# Editor and OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
