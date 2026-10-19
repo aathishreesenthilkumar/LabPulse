@@ -4,7 +4,7 @@
   "private": true,
   "description": "LabPulse — real-time lab monitoring, geofenced attendance and asset booking on Google Apps Script",
   "scripts": {
-    "test": "node tests/run.js && node tests/ui-smoke.js",
+    "test": "node tests/run.js && node tests/v2.js && node tests/ui-smoke.js",
     "test:server": "node tests/run.js",
     "test:ui": "node tests/ui-smoke.js",
     "login": "clasp login",

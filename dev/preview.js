@@ -4,11 +4,16 @@
  *
  *   npm run preview      then open http://localhost:8787
  *
+ * The QR on the monitor links to this laptop's Wi-Fi address, so a phone on the same
+ * Wi-Fi can scan it. GPS stays simulated: phones only allow real GPS on https pages,
+ * which the deployed Apps Script app has.
+ *
  * Differences from the deployed app: identity comes from a role picker instead of Google
  * sign-in, GPS can be simulated, PDFs are rendered as HTML pages, and emails go to an outbox.
  */
 'use strict';
 const http = require('http');
+const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
@@ -16,6 +21,20 @@ const { world, LAB } = require('../tests/fixtures');
 
 const PORT = Number(process.env.PORT) || 8787;
 const BASE = 'http://localhost:' + PORT;
+
+/** First non-internal IPv4 address (the Wi-Fi/LAN address phones can reach), or null. */
+function lanAddress() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const n of nets[name] || []) {
+      if (n.family === 'IPv4' && !n.internal && !/^169\.254\./.test(n.address)) return n.address;
+    }
+  }
+  return null;
+}
+const LAN = lanAddress();
+// Links that leave this laptop (the QR, files) use the LAN address when there is one.
+const PUBLIC = LAN ? 'http://' + LAN + ':' + PORT : BASE;
 const SRC = path.join(__dirname, '..', 'src');
 const read = (f) => fs.readFileSync(path.join(SRC, f), 'utf8');
 
@@ -38,7 +57,7 @@ const files = {};
 env.ctx.__saveFile = (blob, shareWith) => {
   const id = 'F' + Object.keys(files).length;
   files[id] = { name: blob.name || 'file', type: blob.type || 'text/html', body: blob.html || blob.data || '' };
-  return { id, name: files[id].name, url: BASE + '/files/' + id };
+  return { id, name: files[id].name, url: PUBLIC + '/files/' + id };
 };
 env.ctx.Utilities.newBlob = (data, type, name) => ({
   data, type, name,
@@ -83,7 +102,9 @@ const PEOPLE = [
   ['s2@karunya.edu.in', 'Student Two', 'Student'],
   ['s3@karunya.edu.in', 'Student Three', 'Student'],
   ['faculty@karunya.edu', 'Dr Faculty', 'Faculty (coordinates the demo courses)'],
-  ['staff@karunya.edu', 'Staff One', 'Lab staff'],
+  ['staff@karunya.edu', 'Staff One', 'Lab staff (equipment handover, monitor)'],
+  ['coord@karunya.edu', 'Lab Coordinator', 'Coordinator (facilities, students, all staff work)'],
+  ['hod@karunya.edu', 'HOD CSE', 'HOD (read-only view of everything)'],
   ['admin@karunya.edu', 'Admin One', 'Super Admin'],
   ['newcomer@karunya.edu.in', 'New user', 'First sign-in (registration)'],
   ['someone@gmail.com', 'Outsider', 'Outside account (rejected)']
@@ -150,7 +171,7 @@ function doGet(as, params) {
   env.session.active = as;
   const out = env.ctx.doGet({ parameter: params });
   const boot = out.boot;
-  boot.webAppUrl = BASE + '/app';
+  boot.webAppUrl = PUBLIC + '/app';
   return { file: out.file + '.html', boot };
 }
 
@@ -164,11 +185,12 @@ function landing(c) {
   <title>LabPulse preview</title><script src="https://cdn.tailwindcss.com/3.4.16"></script></head>
   <body class="bg-slate-100 text-slate-900"><div class="max-w-4xl mx-auto p-6 space-y-5">
   <div><h1 class="text-2xl font-bold">LabPulse — local preview</h1>
-  <p class="text-slate-600 text-sm mt-1">The real server code running on this machine with in-memory Google services. Data resets when the preview stops. Currently signed in as <b>${esc(c.as || 'nobody')}</b> · ${occ} inside AI &amp; IoT Lab.</p></div>
+  <p class="text-slate-600 text-sm mt-1">The real server code running on this machine with in-memory Google services. Data resets when the preview stops. Currently signed in as <b>${esc(c.as || 'nobody')}</b> · ${occ} inside Intel Unnati IoT Lab.</p></div>
 
   <section class="bg-white rounded-xl border p-4"><h2 class="font-semibold mb-3">1 · Open the lab monitor (wall display)</h2>
   <a class="inline-block bg-teal-700 text-white rounded-lg px-4 py-2 font-semibold" href="/as?u=staff@karunya.edu&next=/app%3Fview%3Dmonitor%26lab%3DAIIOT" target="_blank">Open monitor as lab staff ↗</a>
-  <p class="text-xs text-slate-500 mt-2">Opens in a new tab. Keep it open while you scan from this tab and watch the code change.</p></section>
+  <p class="text-xs text-slate-500 mt-2">Opens in a new tab. Keep it open while you scan from this tab and watch the code change.</p>
+  ${LAN ? `<p class="text-sm mt-3 rounded-lg bg-teal-50 text-teal-900 p-3"><b>Scan with your real phone:</b> connect the phone to the same Wi-Fi as this laptop, then point its camera at the monitor’s QR. The phone opens <code>${PUBLIC}</code>, asks who you are, and continues to check-in. Location is simulated (choose it in step 2). If nothing loads on the phone, allow Node.js through Windows Firewall (Private networks).</p>` : '<p class="text-sm mt-3 text-amber-800">No Wi-Fi address found, so phone scanning is unavailable; use the buttons in step 3.</p>'}</section>
 
   <section class="bg-white rounded-xl border p-4"><h2 class="font-semibold mb-3">2 · Simulated phone location</h2>
   <div class="flex flex-wrap gap-2">${Object.entries(GPS).map(([k, g]) => `<a href="/gps?m=${k}" class="rounded-lg px-3 py-1.5 text-sm border ${c.gps === k || (!c.gps && k === 'inside') ? 'bg-teal-50 border-teal-600 text-teal-800 font-semibold' : 'bg-white'}">${esc(g.label)}</a>`).join('')}</div></section>
@@ -183,6 +205,19 @@ function landing(c) {
   <section class="bg-white rounded-xl border p-4"><h2 class="font-semibold mb-2">Outbox (emails the app would send)</h2>
   ${mail.length ? '<ul class="text-sm divide-y">' + mail.map((m) => `<li class="py-2"><b>${esc(m.subject)}</b><div class="text-xs text-slate-500">to ${esc(m.to)}</div></li>`).join('') + '</ul>' : '<p class="text-sm text-slate-500">No emails yet.</p>'}
   </section></div></body></html>`;
+}
+
+function picker(dev, claim) {
+  const esc = (s) => String(s).replace(/[&<>"]/g, (x) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[x]));
+  const users = PEOPLE.filter((p) => p[2].indexOf('Student') === 0 || p[0].indexOf('newcomer') === 0 || p[0].indexOf('gmail') !== -1);
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LabPulse preview · who are you?</title><script src="https://cdn.tailwindcss.com/3.4.16"></script></head>
+  <body class="bg-slate-100 text-slate-900"><div class="max-w-md mx-auto p-5 space-y-4">
+  ${claim.ok ? `<h1 class="text-xl font-bold">Who is scanning?</h1>
+  <p class="text-sm text-slate-600">Scan accepted for ${esc(claim.labName)}. In the real app Google sign-in tells LabPulse who you are; in this preview, pick a test user. Your scan is held for 5 minutes.</p>
+  ${users.map((p) => `<a class="block rounded-xl bg-white border px-4 py-3" href="/pick?u=${encodeURIComponent(p[0])}&d=${encodeURIComponent(dev)}"><div class="font-semibold">${esc(p[1])}</div><div class="text-xs text-slate-500">${esc(p[0])}</div></a>`).join('')}`
+  : `<div class="rounded-xl bg-red-50 text-red-900 p-5"><h1 class="text-lg font-bold">Not checked in</h1><p class="mt-1">${esc(claim.message)}</p></div>`}
+  </div></body></html>`;
 }
 
 /* ---------- server ---------- */
@@ -206,10 +241,33 @@ const server = http.createServer((req, res) => {
       if (!tick.open) return send(200, '<p>The lab is closed in settings, so the monitor shows no QR.</p><a href="/">Back</a>');
       return redirect('/app?t=' + encodeURIComponent(tick.token), 'as=' + encodeURIComponent(url.searchParams.get('u')) + '; Path=/');
     }
+    if (url.pathname === '/pick') {
+      // Hand the scan this device already claimed to the chosen user, then continue to check-in.
+      const u = url.searchParams.get('u');
+      const dev = url.searchParams.get('d');
+      sync();
+      const t = env.ctx.Cache.getJson('ticket:' + dev);
+      if (t) {
+        env.ctx.Cache.remove('ticket:' + dev);
+        env.ctx.Cache.putJson('ticket:' + u, t, env.ctx.APP.TICKET_TTL_SEC);
+      }
+      return redirect('/app?resume=1', 'as=' + encodeURIComponent(u) + '; Path=/');
+    }
     if (url.pathname === '/app') {
+      if (!c.as && url.searchParams.get('t')) {
+        // Claim immediately, like the real app does when Google sign-in already knows the user.
+        sync();
+        const dev = 'device-' + Math.random().toString(36).slice(2, 10);
+        const claim = env.ctx.Attendance.claim({ email: dev, role: null, user: null, active: false }, url.searchParams.get('t'));
+        return send(200, picker(dev, claim));
+      }
       if (!c.as) return redirect('/');
       const params = Object.fromEntries(url.searchParams.entries());
       const p = doGet(c.as, params);
+      if (params.resume && p.boot.init && p.boot.init.me && p.boot.init.me.registered) {
+        const t = env.ctx.Attendance.ticket(c.as);
+        if (t) { p.boot.view = 'checkin'; p.boot.claim = { ok: true, labId: t.labId, labName: t.labName, expiresInSec: t.expiresInSec }; }
+      }
       return send(200, renderApp(p.file, p.boot, c.as, c.gps || 'inside'));
     }
     if (url.pathname === '/api' && req.method === 'POST') {
@@ -237,7 +295,8 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log('LabPulse preview running at ' + BASE);
+  console.log(LAN ? 'Phone (same Wi-Fi): ' + PUBLIC + '  (the monitor QR uses this address)' : 'No Wi-Fi address found: phone scanning unavailable.');
   console.log('Users: ' + PEOPLE.map((p) => p[0]).join(', '));
 });

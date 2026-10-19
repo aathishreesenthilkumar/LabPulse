@@ -67,6 +67,7 @@ function page(file, boot, env, email, opts) {
       win.URL.revokeObjectURL = () => {};
       win.open = () => null;
       win.scrollTo = () => {}; // not implemented by jsdom
+      win.addEventListener('unhandledrejection', (ev) => errors.push('Unhandled: ' + ((ev.reason && ev.reason.stack) || ev.reason)));
       if (opts.qr) {
         win.QRCode = function () { this.makeCode = (t) => opts.qr.push(t); this.clear = () => {}; };
         win.QRCode.CorrectLevel = { M: 0 };
@@ -110,10 +111,12 @@ async function test(name, fn) {
     scan(env, 's1@karunya.edu.in');
     env.as('s1@karunya.edu.in')('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 80, reason: { type: 'COURSE', sessionId: 'C-23CS2048' } });
     const expectTabs = {
-      's1@karunya.edu.in': ['home', 'history'],
-      'faculty@karunya.edu': ['sessions', 'reviews', 'reports'],
-      'staff@karunya.edu': ['live', 'reviews', 'inventory', 'courses', 'reports'],
-      'admin@karunya.edu': ['live', 'sessions', 'reviews', 'inventory', 'courses', 'reports', 'settings', 'people', 'audit']
+      's1@karunya.edu.in': ['home', 'projects', 'history'],
+      'faculty@karunya.edu': ['sessions', 'reviews', 'labprojects', 'reports'],
+      'staff@karunya.edu': ['live', 'reviews', 'inventory', 'courses', 'lookup', 'labprojects', 'reports'],
+      'admin@karunya.edu': ['live', 'sessions', 'reviews', 'inventory', 'courses', 'lookup', 'labprojects', 'reports', 'settings', 'people', 'audit'],
+      'coord@karunya.edu': ['live', 'sessions', 'reviews', 'inventory', 'courses', 'lookup', 'labprojects', 'reports', 'students'],
+      'hod@karunya.edu': ['live', 'sessions', 'inventory', 'courses', 'lookup', 'labprojects', 'reports']
     };
     for (const [email, tabs] of Object.entries(expectTabs)) {
       const p = page('Index.html', bootFor(env, email), env, email);
@@ -150,6 +153,9 @@ async function test(name, fn) {
     assert.match(p.doc.body.textContent, /Requested/);
     click(p, '[data-act="checkout"]');
     await settle();
+    p.doc.querySelector('#modal-form [name=note]').value = 'Tested the soil sensor';
+    p.doc.getElementById('modal-form').dispatchEvent(new p.win.Event('submit', { cancelable: true }));
+    await settle();
     assert.match(p.doc.body.textContent, /Not checked in/);
     assertClean(p, 'student home');
   });
@@ -159,7 +165,7 @@ async function test(name, fn) {
     const { claim } = scan(env, 's2@karunya.edu.in');
     const p = page('Index.html', bootFor(env, 's2@karunya.edu.in', { view: 'checkin', claim }), env, 's2@karunya.edu.in');
     await settle();
-    assert.match(p.doc.body.textContent, /Checking in to\s*AI & IoT Lab/);
+    assert.match(p.doc.body.textContent, /Checking in to\s*Intel Unnati IoT Lab/);
     assert.match(p.doc.getElementById('loc-status').textContent, /Location ready/);
     assert.ok(p.doc.getElementById('ci-submit').disabled, 'submit waits for a reason');
     click(p, '[data-act="ci-type"][data-type="RESEARCH"]');
@@ -169,6 +175,15 @@ async function test(name, fn) {
     const eq = p.doc.querySelector('[data-bind="equipment"]');
     eq.value = 'LiDAR unit';
     eq.dispatchEvent(new p.win.Event('input', { bubbles: true }));
+    assert.ok(p.doc.getElementById('ci-submit').disabled, 'needs a project');
+    click(p, '[data-act="ci-project"][data-id="NEW"]');
+    const setBind = (bind, v) => {
+      const el = p.doc.querySelector('[data-bind="' + bind + '"]');
+      el.value = v;
+      el.dispatchEvent(new p.win.Event('input', { bubbles: true }));
+    };
+    setBind('np_title', 'LiDAR SLAM rover');
+    setBind('np_end', '2026-12-20');
     assert.ok(!p.doc.getElementById('ci-submit').disabled, 'submit enabled');
     click(p, '#ci-submit');
     await settle();
@@ -215,6 +230,9 @@ async function test(name, fn) {
     purpose.dispatchEvent(new p.win.Event('input', { bubbles: true }));
     assert.ok(p.doc.getElementById('ci-submit').disabled, 'needs equipment');
     click(p, '[data-act="ci-equip"][data-type="LiDAR"]');
+    assert.ok(p.doc.getElementById('ci-submit').disabled, 'needs a project');
+    click(p, '[data-act="ci-project"][data-id="P-S2"]');
+    click(p, '[data-act="ci-system"][data-id="PC-02"]');
     assert.ok(!p.doc.getElementById('ci-submit').disabled);
     click(p, '#ci-submit');
     await settle();
@@ -236,6 +254,51 @@ async function test(name, fn) {
     await settle();
     assert.match(p.doc.getElementById('report-out').textContent, /\.xlsx/);
     assertClean(p, 'excel');
+  });
+
+  await test('student reserves a slot; staff see it in today’s reservations', async () => {
+    const env = world();
+    const p = page('Index.html', bootFor(env, 's1@karunya.edu.in'), env, 's1@karunya.edu.in');
+    await settle();
+    click(p, '[data-act="booking-new"]');
+    await settle();
+    const f = p.doc.getElementById('modal-form');
+    assert.ok(f, 'reserve form opens');
+    f.querySelector('[name=assetId]').value = '3DP-01';
+    f.querySelector('[name=date]').value = '2026-10-19';
+    f.querySelector('[name=from]').value = '14:00';
+    f.querySelector('[name=to]').value = '16:00';
+    f.querySelector('[name=purpose]').value = 'Print the sensor enclosure';
+    f.dispatchEvent(new p.win.Event('submit', { cancelable: true }));
+    await settle();
+    assert.ok(!p.doc.getElementById('modal-form'), 'modal closed: ' + (p.doc.getElementById('modal-error') || {}).textContent);
+    assert.match(p.doc.getElementById('sec-mybookings').textContent, /3D Printer \(Prusa MK4\)[\s\S]*Confirmed/);
+    assertClean(p, 'reserve');
+    const s = page('Index.html', bootFor(env, 'staff@karunya.edu'), env, 'staff@karunya.edu');
+    await settle();
+    assert.match(s.doc.getElementById('sec-bookings').textContent, /Student One[\s\S]*not checked in yet/);
+    assertClean(s, 'staff bookings');
+  });
+
+  await test('HOD looks up a student by register number and a system by ID', async () => {
+    const env = world();
+    scan(env, 's1@karunya.edu.in');
+    env.as('s1@karunya.edu.in')('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 8, reason: { type: 'RESEARCH', purpose: 'Soil model', equipment: 'None', projectId: 'P-S1', systemId: 'PC-01' } });
+    const p = page('Index.html', bootFor(env, 'hod@karunya.edu'), env, 'hod@karunya.edu');
+    await settle();
+    assert.match(p.doc.getElementById('sec-inside').textContent, /PC-01[\s\S]*Smart Irrigation/, 'live view shows system and project');
+    click(p, '[role="tab"][data-tab="lookup"]');
+    await settle();
+    const fs = p.doc.getElementById('lookup-student');
+    fs.querySelector('[name=q]').value = 'URK24CS1001';
+    fs.dispatchEvent(new p.win.Event('submit', { bubbles: true, cancelable: true }));
+    const fa = p.doc.getElementById('lookup-asset');
+    fa.querySelector('[name=assetId]').value = 'PC-01';
+    fa.dispatchEvent(new p.win.Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    assert.match(p.doc.getElementById('lookup-student-out').textContent, /Student One[\s\S]*Days in lab\s*1[\s\S]*Smart Irrigation with ESP32/);
+    assert.match(p.doc.getElementById('lookup-asset-out').textContent, /People\s*1[\s\S]*Student One/);
+    assertClean(p, 'lookup');
   });
 
   await test('reused QR shows a clear rejection screen', async () => {

@@ -107,7 +107,7 @@ var Attendance = {
   },
 
   /** Courses and events a student can pick right now; details fill in from the list. */
-  options: function (labId) {
+  options: function (labId, ctx) {
     var lab = Settings.lab(labId);
     var d = U.now();
     var list = Db.find('CoursesEvents', function (s) {
@@ -120,14 +120,31 @@ var Attendance = {
       };
     }
     var types = {};
+    var inUse = Attendance.systemsInUse(lab.lab_id);
+    var systems = [];
     Db.all('Assets').forEach(function (a) {
-      if (a.lab_id === lab.lab_id && a.status !== STATUS.ASSET.RETIRED) types[a.type] = true;
+      if (a.lab_id !== lab.lab_id || a.status === STATUS.ASSET.RETIRED) return;
+      types[a.type] = true;
+      if (SYSTEM_CATEGORIES.indexOf(a.category) !== -1 && a.status !== STATUS.ASSET.MAINTENANCE) {
+        systems.push({ asset_id: a.asset_id, name: a.name, type: a.type, in_use: !!inUse[a.asset_id] });
+      }
     });
     return {
       courses: list.filter(function (s) { return s.type === ENTRY_TYPES.COURSE; }).map(view),
       events: list.filter(function (s) { return s.type === ENTRY_TYPES.EVENT; }).map(view),
-      equipment: Object.keys(types).sort() // research visits pick from the lab's own catalog
+      equipment: Object.keys(types).sort(), // research visits pick from the lab's own catalog
+      systems: systems, // which computer / printer / drone the student will work at
+      projects: ctx ? Projects.activeFor(ctx.email, lab.lab_id) : []
     };
+  },
+
+  /** asset_id -> true for systems someone is checked in at right now. */
+  systemsInUse: function (labId) {
+    var used = {};
+    Db.all('ActiveVisits').forEach(function (a) {
+      if (a.lab_id === labId && a.system_id && a.system_id !== OWN_DEVICE) used[a.system_id] = true;
+    });
+    return used;
   },
 
   /**
@@ -202,6 +219,29 @@ var Attendance = {
     } else {
       fail_('INCOMPLETE', 'Choose a reason for your visit.');
     }
+
+    // Which system the person will work at: a lab system, their own laptop, or none.
+    var sys = U.str(r.systemId);
+    if (sys && sys !== OWN_DEVICE) {
+      var asset = Db.byId('Assets', sys);
+      if (!asset || asset.lab_id !== lab.lab_id || SYSTEM_CATEGORIES.indexOf(asset.category) === -1 || asset.status === STATUS.ASSET.RETIRED) {
+        fail_('INCOMPLETE', 'Choose a system from this lab’s list, or “Own laptop”.');
+      }
+      if (asset.status === STATUS.ASSET.MAINTENANCE) fail_('INCOMPLETE', asset.name + ' is under maintenance. Choose another system.');
+    }
+    out.system_id = sys;
+
+    // Extra-hours (research) visits must say which project the time goes to.
+    var pid = U.str(r.projectId);
+    if (pid) {
+      var proj = Db.byId('Projects', pid);
+      if (!proj || proj.lab_id !== lab.lab_id || proj.status !== Projects.STATUS.ACTIVE) fail_('INCOMPLETE', 'Choose one of your active projects in this lab.');
+      if (opts && opts.email && !Projects.isMember(proj, opts.email)) fail_('INCOMPLETE', 'You are not a member of that project.');
+    } else if (type === ENTRY_TYPES.RESEARCH && !(opts && opts.anyTime)) {
+      fail_('INCOMPLETE', 'Choose the project you are working on, or create one.');
+    }
+    out.project_id = pid;
+
     // Outside operating hours (staff override) there is no closing time to fall back on.
     if (out.expected_end_at.getTime() <= d.getTime()) {
       out.expected_end_at = new Date(d.getTime() + APP.MANUAL_VISIT_HOURS * 3600000);
@@ -229,7 +269,7 @@ var Attendance = {
       Audit.log(ctx, 'CHECK_IN', '', 'REJECTED', 'Outside operating hours', lab.lab_id);
       fail_('LAB_CLOSED', lab.name + ' is closed now (' + lab.open_time + '–' + lab.close_time + '). Lab staff can make a supervised entry.');
     }
-    var reason = Attendance.resolveReason(lab, p.reason, now);
+    var reason = Attendance.resolveReason(lab, p.reason, now, { email: ctx.email });
     var loc = { lat: p.lat, lng: p.lng, accuracy: p.accuracy, mock: p.mock === true, posAgeMs: p.posAgeMs };
 
     var result = withLock_(function () {
@@ -295,7 +335,10 @@ var Attendance = {
         close_type: '',
         status: STATUS.VISIT.ACTIVE,
         created_by: ctx.email,
-        request_id: U.str(p.requestId, 64)
+        request_id: U.str(p.requestId, 64),
+        system_id: reason.system_id,
+        project_id: reason.project_id,
+        work_note: ''
       });
       Db.insert('ActiveVisits', {
         visit_id: visit.visit_id,
@@ -306,7 +349,9 @@ var Attendance = {
         expected_end_at: visit.expected_end_at,
         entry_type: visit.entry_type,
         course_or_event_id: visit.course_or_event_id,
-        review_status: visit.review_status
+        review_status: visit.review_status,
+        system_id: visit.system_id,
+        project_id: visit.project_id
       });
       Audit.log(ctx, 'CHECK_IN', visit.visit_id, ev.level, visit.confidence_reason, lab.lab_id);
       Attendance.refreshOccupancy(lab.lab_id);
@@ -352,6 +397,8 @@ var Attendance = {
         return x.email === ctx.email && (!p.labId || x.lab_id === U.str(p.labId).toUpperCase());
       });
       if (!a) fail_('NOT_CHECKED_IN', 'You are not checked in.');
+      var note = U.str(p.note, 500);
+      if (note) Db.update('Visits', Db.byId('Visits', a.visit_id), { work_note: note });
       var v = Attendance.closeVisit(a.visit_id, U.now(), STATUS.CLOSE.MANUAL, ctx, '');
       return { outcome: 'CHECKED_OUT', visit: Attendance.publicVisit(v) };
     });
@@ -368,8 +415,10 @@ var Attendance = {
    */
   canReview: function (ctx, visit) {
     if (ctx.role === ROLES.ADMIN) return true;
-    if (visit.entry_type === ENTRY_TYPES.RESEARCH || !visit.course_or_event_id) return ctx.role === ROLES.STAFF;
+    var labTeam = ctx.role === ROLES.STAFF || ctx.role === ROLES.COORDINATOR;
+    if (visit.entry_type === ENTRY_TYPES.RESEARCH || !visit.course_or_event_id) return labTeam;
     var s = Db.byId('CoursesEvents', visit.course_or_event_id);
+    if (ctx.role === ROLES.COORDINATOR) return true; // the lab coordinator may review any session
     return !!s && s.coordinator_email === ctx.email && (ctx.role === ROLES.FACULTY || ctx.role === ROLES.STAFF);
   },
 
@@ -450,12 +499,14 @@ var Attendance = {
         expected_end_at: reason.expected_end_at, is_valid_geofence: false,
         confidence: STATUS.CONF.MANUAL, confidence_reason: 'Staff manual entry: ' + why,
         review_status: STATUS.REVIEW.NONE, reviewed_by: '', reviewed_at: '', close_type: '',
-        status: STATUS.VISIT.ACTIVE, created_by: ctx.email, request_id: ''
+        status: STATUS.VISIT.ACTIVE, created_by: ctx.email, request_id: '',
+        system_id: reason.system_id, project_id: reason.project_id, work_note: ''
       });
       Db.insert('ActiveVisits', {
         visit_id: visit.visit_id, user_id: visit.user_id, email: email, lab_id: lab.lab_id,
         check_in_at: now, expected_end_at: visit.expected_end_at, entry_type: visit.entry_type,
-        course_or_event_id: visit.course_or_event_id, review_status: ''
+        course_or_event_id: visit.course_or_event_id, review_status: '',
+        system_id: visit.system_id, project_id: visit.project_id
       });
       Audit.log(ctx, override ? 'MANUAL_ENTRY_OVERRIDE_HOURS' : 'MANUAL_ENTRY', visit.visit_id, 'CREATED', email + ': ' + why, lab.lab_id);
       Attendance.refreshOccupancy(lab.lab_id);
@@ -523,7 +574,7 @@ var Attendance = {
           visit_id: v.visit_id, user_id: v.user_id, email: v.email, lab_id: v.lab_id,
           check_in_at: v.check_in_at, expected_end_at: v.expected_end_at,
           entry_type: v.entry_type, course_or_event_id: v.course_or_event_id,
-          review_status: v.review_status
+          review_status: v.review_status, system_id: v.system_id, project_id: v.project_id
         };
       }));
       if (drift && !force) Audit.log(null, 'RECONCILE_DRIFT', 'ActiveVisits', 'FIXED', have.split(',').length + ' -> ' + expected.length + ' rows', '');
@@ -576,7 +627,10 @@ var Attendance = {
       confidence: v.confidence,
       review_status: v.review_status,
       close_type: v.close_type,
-      status: v.status
+      status: v.status,
+      system_id: v.system_id || '',
+      project_id: v.project_id || '',
+      work_note: v.work_note || ''
     };
   },
 

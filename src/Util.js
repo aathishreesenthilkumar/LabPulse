@@ -115,7 +115,7 @@ var U = {
   },
 
   str: function (v, max) {
-    var s = String(v == null ? '' : v).trim();
+    var s = String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
     return max ? s.slice(0, max) : s;
   },
 

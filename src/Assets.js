@@ -24,8 +24,9 @@ var Assets = {
   /** "Free right now" chips on the student dashboard. */
   freeNow: function (labId) {
     var counts = {};
+    var inUse = Attendance.systemsInUse(labId);
     Db.all('Assets').forEach(function (a) {
-      if (a.lab_id !== labId || a.status !== STATUS.ASSET.AVAILABLE) return;
+      if (a.lab_id !== labId || a.status !== STATUS.ASSET.AVAILABLE || inUse[a.asset_id]) return;
       counts[a.type] = (counts[a.type] || 0) + 1;
     });
     return Object.keys(counts).sort().map(function (t) {
@@ -65,6 +66,9 @@ var Assets = {
         fail_('PENDING_REVIEW', 'Your check-in is waiting for review. You can request equipment once it is confirmed.');
       }
       if (asset.status !== STATUS.ASSET.AVAILABLE) fail_('UNAVAILABLE', asset.name + ' is not available right now.');
+      var now0 = U.now();
+      var held = Bookings.heldByOther(asset.asset_id, ctx.email, now0, new Date(now0.getTime() + hours * 3600000));
+      if (held) fail_('UNAVAILABLE', asset.name + ' is reserved from ' + U.fmt(held.start_at) + '. Reserve another slot instead.');
       var open = Db.find('Requests', function (r) {
         return r.requester_email === ctx.email && r.status === STATUS.REQUEST.PENDING;
       });
@@ -278,7 +282,7 @@ var Assets = {
     var users = Attendance.userIndex();
     function who(email) {
       var u = users[email] || {};
-      return { name: u.name || email, reg_no: u.reg_no || '', email: email };
+      return { name: u.name || email, reg_no: u.reg_no || '', email: email, mobile: Crypto.reveal(u.mobile) };
     }
     var pending = Db.find('Requests', function (r) {
       return r.lab_id === labId && r.status === STATUS.REQUEST.PENDING;

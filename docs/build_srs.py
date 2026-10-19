@@ -1,4 +1,4 @@
-"""Builds docs/LabPulse_SRS_v1.3.pdf.  Usage: python docs/build_srs.py"""
+"""Builds docs/LabPulse_SRS_v1.4.pdf.  Usage: python docs/build_srs.py"""
 import os
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -8,7 +8,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import (KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle, ListFlowable, ListItem)
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'LabPulse_SRS_v1.3.pdf')
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'LabPulse_SRS_v1.4.pdf')
 
 ss = getSampleStyleSheet()
 BODY = ParagraphStyle('body', parent=ss['Normal'], fontName='Times-Roman', fontSize=11, leading=15, spaceAfter=6)
@@ -62,7 +62,7 @@ def table(header, rows, widths, highlight_col=None):
 def footer(canvas, doc):
     canvas.saveState()
     canvas.setFont('Times-Roman', 9)
-    canvas.drawCentredString(A4[0] / 2, 12 * mm, 'LabPulse – Software Requirements Specification v1.3 | Page %d' % doc.page)
+    canvas.drawCentredString(A4[0] / 2, 12 * mm, 'LabPulse – Software Requirements Specification v1.4 | Page %d' % doc.page)
     canvas.restoreState()
 
 
@@ -80,8 +80,8 @@ for line in [
     '<b>Karunya Institute of Technology and Sciences</b>',
     'Division of Computer Science and Engineering',
     'Course: 23CS2048 – Web Technology (3 IA Project)',
-    'Reference: Circular KITS/CSE/CIR/2026/163 and the client’s GeoFence Proposal',
-    'Version 1.3 | 18 October 2026',
+    'Reference: Circular KITS/CSE/CIR/2026/163, the client’s GeoFence Proposal and the supervisor’s briefing',
+    'Version 1.4 | 19 October 2026',
     '<b>Submitted by (III B.Tech CSE)</b>',
     'RS Aathishree — URK24CS1249',
     'Harivaishnavi B — URK24CS1238',
@@ -93,7 +93,23 @@ for line in [
 story.append(PageBreak())
 
 # ---------------------------------------------------------------- revision note
-h1('What changed in version 1.3')
+h1('What changed in version 1.4')
+p('After version 1.3 the supervisor briefed the teams (two voice messages). Version 1.4 adds everything in that '
+  'briefing. The first deployment is the <b>Intel Unnati IoT Lab</b>; nothing is tied to one room, so the same app '
+  'serves every lab in the department.')
+table(['Supervisor asked for', 'What LabPulse now does', 'Requirement'], [
+    ['See from home how many students are in the lab, which systems they use and what projects they work on', 'Check-in records the system (lab PC, GPU node, 3D printer, drone or own laptop) and, for extra hours, the project. HOD, Coordinator and staff see a live “who’s in the lab” list: name, register number, system, project, time in', 'FR-38'],
+    ['Assets such as 3D printers, drones and computers with graphics cards, used by timeline, with a queue to reserve a spot', 'Catalog includes them. Students reserve a time slot; if it is taken they join a waitlist and are emailed when it frees up. Staff start the session only when the student is checked in. No-shows release the slot', 'FR-40, FR-48'],
+    ['Record the project, its timeline and its outcome', 'Projects with title, members, start and end date, a work log built from each visit (system, hours, “what I did today”), and a submitted outcome with a link', 'FR-39'],
+    ['Given a register number: how many days and how long in the lab', 'Lookup by register number: days in lab, total hours, visits by day, systems, projects', 'FR-41'],
+    ['Given a system: how many people used it and for what', 'Lookup by system: number of people, uses, hours, and each use with person, purpose and project', 'FR-42'],
+    ['Regular lab (e.g. Web Technology at 11 am): faculty find who is missing', 'Roster shows Present · Pending · Missing; faculty are emailed the missing list after the session; CSV download', 'FR-43'],
+    ['Google Sheets storage with periodic backups and multiple sheets so one sheet is not overloaded', 'Nightly per-day summaries, monthly archiving of old rows to a yearly archive spreadsheet, nightly backup copies with retention', 'FR-44, FR-45'],
+    ['Encrypt crucial data such as phone numbers, and validate input', 'Phone numbers stored encrypted with tamper detection, shown only to roles that need them; stricter validation of register numbers, names and all input on the server', 'FR-46, FR-47'],
+    ['Roles: student (sees own hours), coordinator (add/remove facilities and students), HOD (sees everything), super admin (manages roles)', 'Six roles: Student, Faculty, Lab staff, Coordinator, HOD (read-only), Super Admin', 'FR-37'],
+], [52, 92, 26])
+
+h1('Changes in version 1.3')
 p('Version 1.2 was our plan. Version 1.3 aligns that plan line by line with the client’s <b>GeoFence Proposal</b> '
   'and records what has now been built and tested. The proposal is treated as the source of truth; where our plan '
   'differed, the plan has been changed.')
@@ -187,11 +203,13 @@ h1('2. Users and Roles')
 p('Access is restricted to institutional Google accounts (@karunya.edu and @karunya.edu.in). Each user records '
   'name, roll number or employee ID, institutional email and mobile number.')
 table(['Role', 'What they can do'], [
-    ['<b>Student</b>', 'Scan the QR and check in or out with GPS, see the live lab counter, choose a visit reason, request equipment, see their borrowing and visit history'],
-    ['<b>Faculty</b>', 'See the live roster for their active courses or events, verify attendance in real time (confirm Amber check-ins, manual present/absent with a reason), export session attendance logs'],
-    ['<b>Lab In-charge / Staff</b>', 'Monitor the live activity stream and occupancy, manage inventory (add, edit, remove), confirm physical issue and return of equipment, review research and unlisted-session check-ins'],
-    ['<b>Super Admin</b>', 'Configure GPS coordinates, geofence radius and operating hours, manage role permissions, inspect audit logs'],
-], [40, 130])
+    ['<b>Student</b>', 'Scan the QR and check in or out with GPS, see the live lab counter and their own hours and days, choose a visit reason, system and project, manage projects (timeline, outcome), reserve equipment slots, request items, see borrowing and visit history'],
+    ['<b>Faculty</b>', 'See the live roster for their courses or events (Present · Pending review · Missing), confirm flagged check-ins, mark present or absent with a reason, export session logs, receive the missing list by email'],
+    ['<b>Lab Staff</b>', 'Run the lab monitor, watch live activity, hand over and take back equipment, start and finish reserved sessions, make supervised manual entries, review research check-ins'],
+    ['<b>Coordinator</b>', 'Everything Lab Staff can do, plus add, edit and remove facilities (inventory), add and remove students, manage courses and events, see live usage, lookups and reports'],
+    ['<b>HOD</b>', 'Read-only view of every lab: who is in it, on which system and project, rosters, projects, lookups by register number or system, reports and exports. Cannot change anything'],
+    ['<b>Super Admin</b>', 'Manage every role and permission, configure GPS coordinates, geofence radius, operating hours and system settings, inspect audit logs, run maintenance jobs'],
+], [32, 138])
 
 # ---------------------------------------------------------------- 3 architecture
 h1('3. System Architecture')
@@ -355,6 +373,21 @@ fr('5.6 Administration', [
     ['FR-35', 'Super Admin sets lab coordinates, radius, operating hours and system constants (stored in PropertiesService), per lab.', 'P0', B],
     ['FR-36', 'Super Admin manages role permissions and views the audit log.', 'P0', B],
 ])
+fr('5.8 Supervisor briefing additions (version 1.4)', [
+    ['FR-37', 'Six roles: Student, Faculty, Lab Staff, Coordinator, HOD (read-only) and Super Admin, enforced on the server for every request. Coordinators manage student accounts only; only the Super Admin changes other roles.', 'P0', B],
+    ['FR-38', 'Check-in records the system used (lab computer, GPU node, 3D printer, drone, or own laptop) and the project for extra-hours visits. A live view lists everyone inside with register number, system, project and time in; systems in use show on the Lab Map.', 'P0', B],
+    ['FR-39', 'Projects have a title, description, members, start and end date (timeline), status and a submitted outcome with an optional link. Check-out asks what was done; each project shows a work log and total hours.', 'P0', B],
+    ['FR-40', 'Students reserve equipment for a time slot inside opening hours (length and advance limits are settings). Overlapping requests join a first-come waitlist with a visible position; cancellations and no-shows promote the next person, who is emailed. A session starts only when the student is checked in.', 'P0', B],
+    ['FR-41', 'Lookup by register number or email: days in the lab, total hours, visits by day, systems used and projects. Students see their own totals.', 'P0', B],
+    ['FR-42', 'Lookup by system or item: number of different users, number of uses, total hours, and each use with person, purpose or project.', 'P0', B],
+    ['FR-43', 'For timetabled sessions, the roster marks enrolled students who did not attend as Missing once the session ends; the session faculty is emailed the list once; it can be downloaded as CSV.', 'P0', B],
+    ['FR-44', 'Nightly per-person and per-item daily summaries; monthly, closed rows older than a configurable number of months move to a yearly archive spreadsheet without changing totals.', 'P0', B],
+    ['FR-45', 'Nightly backup copy of the spreadsheet, keeping the last N daily copies and one per older month.', 'P0', 'Built; verify on deployment'],
+    ['FR-46', 'Phone numbers are stored encrypted with integrity protection; only Super Admin, Coordinator and staff following up a loan see the full number; others see a masked form; exports never include it.', 'P0', B],
+    ['FR-47', 'Server-side validation of register numbers (e.g. URK24CS1249), names, phone numbers, emails, dates, slot times and text lengths; control characters are stripped.', 'P0', B],
+    ['FR-48', 'The catalog includes 3D printers, drones and lab computers with graphics cards, in addition to the proposal’s GPU nodes, IoT boards and sensors.', 'P0', B],
+])
+
 h2('5.7 How the report numbers are calculated')
 table(['Metric', 'Definition'], [
     ['Unique visits', 'Different people with at least one verified visit that day'],
@@ -407,6 +440,11 @@ table(['Tab', 'Holds', 'Key fields'], [
     ['Requests', 'Booking requests', 'request_id, asset_id, requester_id, window, status, decided_by, decided_at'],
     ['Loans', 'Issued items', 'loan_id, asset_id, borrower_id, issued_by, issued_at, due_at, returned_at, return_condition, status'],
     ['AuditLog', 'Append-only history', 'event_id, timestamp, actor, role, action, target, outcome, reason'],
+    ['Projects', 'Student projects', 'project_id, title, description, owner, members, start_date, end_date, status, outcome, outcome_link'],
+    ['Bookings', 'Time-slot reservations and queue', 'booking_id, asset_id, user, project_id, start_at, end_at, purpose, status (BOOKED, WAITLIST, IN_USE, DONE, CANCELLED, NO_SHOW)'],
+    ['UsageDaily', 'Nightly summary per person per day', 'date, lab_id, email, visits, minutes, first in, last out, projects, systems'],
+    ['AssetUsageDaily', 'Nightly summary per item per day', 'date, lab_id, asset_id, uses, minutes, users, purposes'],
+    ['(Archive YYYY)', 'Separate yearly spreadsheet', 'Same tabs as above for rows moved out of the live spreadsheet'],
 ], [30, 50, 90])
 p('<b>Rules.</b> IDs are unique and required fields are validated before every write. An asset with an active loan '
   'cannot be given to someone else. Occupancy is always calculated from active visits, never typed in, and '
@@ -423,6 +461,7 @@ table(['Attempt', 'Our defence', 'How we test it'], [
     ['Calling an admin function directly', 'Server-side role check on every endpoint, including doPost', 'Call each endpoint as each role; expect denial (AT-07, AT-11)'],
     ['Borrowing without being in the lab', 'Verified CHECKED_IN gate on the server', 'Request while checked out, and while pending review; expect rejection (AT-06)'],
     ['Equipment never returned', 'Due dates, overdue flag, reminders, audit trail', 'Create a loan with a past due date (AT-08)'],
+    ['Reading phone numbers from the sheet', 'Encrypted at rest (enc:v1), masked in most screens, tamper detected', 'Inspect the Users sheet; edit a cell and expect a “damaged” warning'],
     ['Private data in an export', 'Field minimisation (no mobile numbers) and role-restricted exports', 'Check export contents per role'],
 ], [42, 64, 64])
 p('<b>Privacy.</b> Raw coordinates are never stored or logged. Public inventory views never show borrower names or '
@@ -467,10 +506,12 @@ at = [
 table(['ID', 'Test', 'Expected', 'Result'],
       [r + (['Logic passes; real Docs/Gmail to verify after deployment'] if r[0] == 'AT-10' else ['Pass']) for r in at],
       [16, 64, 52, 38])
-p('In total, <b>37 server tests</b> (the 15 above plus token forgery, travel speed, idempotent retries, '
-  'reconciliation, role overrides, unlisted sessions, Excel export, doPost and export minimisation) and <b>11 UI '
-  'tests</b> (every dashboard for every role, the phone check-in flows, the handshake and the lab monitor, rendered '
-  'against the real server code) pass.')
+p('In total <b>68 automated checks</b> pass: <b>37 server tests</b> (the 15 above plus token forgery, travel speed, '
+  'idempotent retries, reconciliation, role overrides, unlisted sessions, Excel export, doPost and export '
+  'minimisation), <b>18 tests for the supervisor’s briefing</b> (roles, HOD read-only, systems and projects, the '
+  'reservation queue and no-shows, lookups, rollups and archiving, encryption and tamper detection, validation, the '
+  'missing list) and <b>13 UI tests</b> (every dashboard for every role, phone check-in flows, reservations, lookups, '
+  'the handshake and the lab monitor, rendered against the real server code).')
 h2('10.2 Still to verify on the deployed app')
 bullets([
     'Real Google Docs to PDF, Drive files, Excel export and Gmail delivery (AT-10).',
@@ -494,7 +535,8 @@ table(['When', 'Focus', 'Status'], [
     ['14 Oct', 'Submit SRS v1.2. Apps Script project, sheets and sign-in.', 'Done'],
     ['15–16 Oct', 'Roles, settings, QR generation and validation.', 'Done'],
     ['17–18 Oct', 'Geofence, check-in and check-out, occupancy, confidence scoring. Align with the client proposal (v1.3).', 'Done'],
-    ['19–20 Oct', 'Deploy to Google. Test on real phones in the lab; tune radius and accuracy thresholds.', 'Next'],
+    ['19 Oct', 'Supervisor briefing: Coordinator and HOD roles, systems and projects, reservation queue, lookups, archiving, encryption, missing list (v1.4).', 'Done'],
+    ['20 Oct', 'Deploy to Google. Test on real phones in the lab; tune radius and accuracy thresholds.', 'Next'],
     ['21 Oct', 'Verify PDF, Excel, email and triggers on the deployment; load test.', 'Planned'],
     ['22 Oct', 'Demo data, bug fixes. Review-ready.', 'Planned'],
     ['23 Oct', 'Freeze at 5 PM. Final fixes only. Submission.', 'Planned'],
@@ -523,6 +565,8 @@ bullets([
     'Who receives reports, how long is data kept, and who can see exports?',
     'How many users and labs, and what peak arrival rate should we design for?',
     'Are the added ideas (Presence Confidence, Lab Map, Lab Passport) part of the assessed scope, or extras?',
+    'Is a read-only HOD view the intended scope, and who should hold the Coordinator role for the Intel Unnati IoT Lab?',
+    'How long should archived years and backups be kept (defaults: archive after 3 months, keep 14 daily backups plus one per month)?',
 ], numbered=True)
 story.append(Spacer(1, 8))
 p('<i>Status statement: all requirements in this document are implemented and pass automated tests on local '
@@ -530,6 +574,6 @@ p('<i>Status statement: all requirements in this document are implemented and pa
   'phones; Section 10.2 lists what remains to verify.</i>')
 
 doc = SimpleDocTemplate(OUT, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=20 * mm,
-                        title='LabPulse – Software Requirements Specification v1.3', author='Team LabPulse')
+                        title='LabPulse – Software Requirements Specification v1.4', author='Team LabPulse')
 doc.build(story, onFirstPage=footer, onLaterPages=footer)
 print(OUT)

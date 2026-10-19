@@ -17,10 +17,13 @@ function jobReconcile() {
   return Attendance.reconcile();
 }
 
-/** Every 10 minutes: close visits past their duration plus grace, or past closing time. */
+/** Every 10 minutes: close forgotten visits; release no-show bookings to the queue. */
 function jobAutoClose() {
   guardJob_();
-  return Attendance.autoCloseSweep();
+  var visits = Attendance.autoCloseSweep();
+  visits.bookings = Bookings.sweep();
+  visits.missing_emails = Monitoring.missingEmails();
+  return visits;
 }
 
 /** Hourly: mark late loans and email reminders; expire stale requests. */
@@ -54,6 +57,11 @@ function jobMonthlyAudit() {
       Audit.log(null, 'MONTHLY_AUDIT', lab.lab_id, 'FAILED', e.message, lab.lab_id);
     }
   });
+  try {
+    out.push(Usage.archive());
+  } catch (e) {
+    Audit.log(null, 'ARCHIVE', '', 'FAILED', e.message, '');
+  }
   return out;
 }
 
@@ -82,6 +90,14 @@ function runDailyDigests_(force) {
   if (!force && props.getProperty('BACKUP_DATE') !== today && U.ist(now).h >= 21) {
     backupSpreadsheet_();
   }
+  if (!force && props.getProperty('ROLLUP_RUN') !== today) {
+    try {
+      Usage.nightly();
+      props.setProperty('ROLLUP_RUN', today);
+    } catch (e) {
+      Audit.log(null, 'ROLLUP', today, 'FAILED', e.message, '');
+    }
+  }
   return out;
 }
 
@@ -99,8 +115,38 @@ function backupSpreadsheet_() {
   var today = U.dateKey(U.now());
   var copy = DriveApp.getFileById(Db.spreadsheet().getId()).makeCopy('LabPulse backup ' + today, folder);
   Settings.props().setProperty('BACKUP_DATE', today);
-  Audit.log(null, 'BACKUP', copy.getName(), 'OK', '', '');
+  var trashed = pruneBackups_(folder);
+  Audit.log(null, 'BACKUP', copy.getName(), 'OK', trashed ? trashed + ' old backup(s) moved to trash' : '', '');
   return { name: copy.getName(), url: copy.getUrl() };
+}
+
+/**
+ * Keeps the newest `backup_keep_days` daily copies, plus the newest copy of every older month.
+ * Older copies go to Drive trash (recoverable for 30 days), so backups never pile up.
+ */
+function pruneBackups_(folder) {
+  var keepDays = Settings.global().backup_keep_days;
+  var files = [];
+  var it = folder.getFiles();
+  while (it.hasNext()) {
+    var f = it.next();
+    var m = /^LabPulse backup (\d{4}-\d{2}-\d{2})$/.exec(f.getName());
+    if (m) files.push({ file: f, date: m[1] });
+  }
+  files.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  var monthKept = {};
+  var trashed = 0;
+  files.forEach(function (x, i) {
+    if (i < keepDays) return;
+    var month = x.date.slice(0, 7);
+    if (!monthKept[month]) {
+      monthKept[month] = true;
+      return;
+    }
+    x.file.setTrashed(true);
+    trashed++;
+  });
+  return trashed;
 }
 
 /** Run once from the editor (or from Admin › Settings) to install every trigger. */

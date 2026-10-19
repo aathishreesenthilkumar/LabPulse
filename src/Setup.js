@@ -34,10 +34,11 @@ function setup() {
   ss.setSpreadsheetTimeZone(APP.TZ);
 
   Settings.secret();
+  Crypto.keys();
 
   if (!Db.all('Config').length) {
     Db.insert('Config', {
-      lab_id: 'AIIOT', name: 'AI & IoT Lab', lat: 10.9364, lng: 76.7442, radius_m: 20,
+      lab_id: 'AIIOT', name: 'Intel Unnati IoT Lab', lat: 10.9364, lng: 76.7442, radius_m: 20,
       open_time: '08:00', close_time: '20:00', open_days: 'MON,TUE,WED,THU,FRI,SAT',
       accuracy_limit_m: 30, amber_margin_m: 30, speed_flag_kmh: 25, speed_block_kmh: 200,
       qr_rotate_sec: 8, grace_min: 15, incharge_email: '', map_cols: 8, map_rows: 5,
@@ -61,6 +62,7 @@ function setup() {
     }
     Auth.invalidate(email);
   });
+  Crypto.migrate(); // encrypt any phone numbers stored before encryption existed
   Audit.log(null, 'SETUP', ss.getId(), 'OK', 'admins=' + admins.join(','), '');
   console.log('LabPulse data spreadsheet: ' + ss.getUrl());
   console.log('Super Admins: ' + (admins.join(', ') || 'none — set BOOTSTRAP_ADMINS and run setup() again'));
@@ -89,6 +91,14 @@ function seedDemoData() {
         ['RPI-01', 'Raspberry Pi 5 #1', 'IOT', 'Raspberry Pi', 'Bench C', 5, 2],
         ['RPI-02', 'Raspberry Pi 5 #2', 'IOT', 'Raspberry Pi', 'Bench C', 6, 2],
         ['RPI-03', 'Raspberry Pi 5 #3', 'IOT', 'Raspberry Pi', 'Bench C', 7, 2],
+        ['PC-01', 'Lab PC 1 (RTX 3060)', 'COMPUTE', 'Lab PC (GPU)', 'Row B', 0, 1],
+        ['PC-02', 'Lab PC 2 (RTX 3060)', 'COMPUTE', 'Lab PC (GPU)', 'Row B', 1, 1],
+        ['PC-03', 'Lab PC 3', 'COMPUTE', 'Lab PC', 'Row B', 2, 1],
+        ['PC-04', 'Lab PC 4', 'COMPUTE', 'Lab PC', 'Row B', 3, 1],
+        ['3DP-01', '3D Printer (Prusa MK4)', 'FABRICATION', '3D Printer', 'Maker corner', 5, 1],
+        ['3DP-02', '3D Printer (Ender 3)', 'FABRICATION', '3D Printer', 'Maker corner', 6, 1],
+        ['DRN-01', 'Drone (DJI Tello EDU)', 'DRONE', 'Drone', 'Drone cage', 0, 3],
+        ['DRN-02', 'Drone (Pixhawk quad)', 'DRONE', 'Drone', 'Drone cage', 1, 3],
         ['LORA-01', 'LoRaWAN Gateway #1', 'IOT', 'LoRaWAN Gateway', 'Rack', 6, 0],
         ['LORA-02', 'LoRaWAN Gateway #2', 'IOT', 'LoRaWAN Gateway', 'Rack', 7, 0],
         ['US-01', 'Ultrasonic Sensor HC-SR04 #1', 'SENSOR', 'Ultrasonic', 'Cabinet', 0, 4],

@@ -47,10 +47,24 @@ var Monitoring = {
     };
   },
 
-  /** Who is inside right now (staff view). */
+  systemLabel: function (id, assets) {
+    if (!id) return 'Not specified';
+    if (id === OWN_DEVICE) return 'Own laptop';
+    var a = assets[id];
+    return a ? a.name + ' (' + a.asset_id + ')' : id;
+  },
+
+  /**
+   * Who is inside right now: name, register number, the system they are working at and the
+   * project they are working on. This is the "from home" view for HOD, Coordinator and staff.
+   */
   inside: function (labId) {
     var users = Attendance.userIndex();
     var now = U.now();
+    var assets = {};
+    Db.all('Assets').forEach(function (a) { assets[a.asset_id] = a; });
+    var projects = {};
+    Db.all('Projects').forEach(function (p) { projects[p.project_id] = p; });
     return Db.find('ActiveVisits', function (a) {
       return a.lab_id === labId;
     }).map(function (a) {
@@ -59,7 +73,10 @@ var Monitoring = {
       return {
         visit_id: a.visit_id, name: u.name || a.email, reg_no: u.reg_no || '', email: a.email,
         entry_type: a.entry_type, check_in_at: a.check_in_at, expected_end_at: a.expected_end_at,
-        duration_ms: now - a.check_in_at, confidence: v.confidence, review_status: v.review_status
+        duration_ms: now - a.check_in_at, confidence: v.confidence, review_status: v.review_status,
+        system_id: a.system_id, system: Monitoring.systemLabel(a.system_id, assets),
+        project_id: a.project_id, project: a.project_id && projects[a.project_id] ? projects[a.project_id].title : '',
+        purpose: v.purpose || ''
       };
     }).sort(function (a, b) { return b.check_in_at - a.check_in_at; });
   },
@@ -70,8 +87,13 @@ var Monitoring = {
    */
   labMap: function (labId) {
     var lab = Settings.lab(labId);
+    var inUse = Attendance.systemsInUse(lab.lab_id);
     var cells = Assets.publicList(labId).filter(function (a) {
       return a.map_x !== null && a.map_y !== null;
+    }).map(function (a) {
+      // A system someone is checked in at shows as in use, even though it is not on loan.
+      if (inUse[a.asset_id] && a.status === 'AVAILABLE') a.status = 'IN_USE';
+      return a;
     });
     return {
       cols: lab.map_cols, rows: lab.map_rows, cells: cells,
@@ -98,14 +120,18 @@ var Monitoring = {
 
   /* ---------- faculty (FR-27) ---------- */
 
-  /** Sessions this faculty member coordinates that run today. Admin sees every session. */
+  seesAllSessions: function (ctx) {
+    return ctx.role === ROLES.ADMIN || ctx.role === ROLES.COORDINATOR || ctx.role === ROLES.HOD;
+  },
+
+  /** Sessions this faculty member coordinates that run today. Admin, Coordinator and HOD see every session. */
   facultySessions: function (ctx, labId) {
     var d = U.now();
     var today = U.dateKey(d);
     return Db.find('CoursesEvents', function (s) {
       if (!U.truthy(s.active)) return false;
       if (labId && s.lab_id !== labId) return false;
-      if (ctx.role !== ROLES.ADMIN && s.coordinator_email !== ctx.email) return false;
+      if (!Monitoring.seesAllSessions(ctx) && s.coordinator_email !== ctx.email) return false;
       if (s.start_date && today < s.start_date) return false;
       if (s.end_date && today > s.end_date) return false;
       if (s.type === ENTRY_TYPES.COURSE && U.str(s.days).toUpperCase().split(',').indexOf(U.dayCode(d)) === -1) return false;
@@ -121,7 +147,7 @@ var Monitoring = {
   sessionFor: function (ctx, sessionId) {
     var s = Db.byId('CoursesEvents', U.str(sessionId));
     if (!s) fail_('NOT_FOUND', 'Session not found.');
-    if (ctx.role !== ROLES.ADMIN && s.coordinator_email !== ctx.email) {
+    if (!Monitoring.seesAllSessions(ctx) && s.coordinator_email !== ctx.email) {
       Audit.log(ctx, 'SECURITY_FORBIDDEN', s.id, 'DENIED', 'Not the session coordinator', s.lab_id);
       fail_('FORBIDDEN', 'You do not coordinate this session.');
     }
@@ -175,8 +201,46 @@ var Monitoring = {
     });
     return {
       session: { id: s.id, type: s.type, code: s.code, name: s.name, lab_id: s.lab_id, start_time: s.start_time, end_time: s.end_time },
-      date: date, roster: out
+      date: date, roster: out,
+      // Once the session has ended, "not yet arrived" means missing.
+      ended: U.now() >= U.istDate(date, isNaN(U.parseHHMM(s.end_time)) ? 24 * 60 : U.parseHHMM(s.end_time)),
+      missing: out.notArrived.concat(out.absent).filter(function (x) { return x.enrolled; })
     };
+  },
+
+  /**
+   * After each timetabled course ends, email its faculty the enrolled students who were missing.
+   * Runs from the 10-minute job; each session/day is emailed once (remembered in the cache).
+   */
+  missingEmails: function () {
+    if (!Settings.global().missing_list_email) return 0;
+    var now = U.now();
+    var today = U.dateKey(now);
+    var m = U.minutesOfDay(now);
+    var sent = 0;
+    Db.all('CoursesEvents').forEach(function (s) {
+      if (!U.truthy(s.active) || s.type !== ENTRY_TYPES.COURSE) return;
+      if (U.str(s.days).toUpperCase().split(',').indexOf(U.dayCode(now)) === -1) return;
+      if ((s.start_date && today < s.start_date) || (s.end_date && today > s.end_date)) return;
+      var end = U.parseHHMM(s.end_time);
+      if (isNaN(end) || m < end || m > end + 120) return;
+      var key = 'missing:' + s.id + ':' + today;
+      if (Cache.get(key)) return;
+      Cache.put(key, '1', 21600);
+      var r = Monitoring.roster({ role: ROLES.ADMIN, email: 'system' }, { sessionId: s.id, date: today });
+      if (!r.missing.length || !U.isEmail(s.coordinator_email)) return;
+      var lines = r.missing.map(function (x) { return '  • ' + x.reg_no + '  ' + x.name + (x.mark === 'ABSENT' ? '  (marked absent: ' + x.mark_reason + ')' : ''); });
+      try {
+        GmailApp.sendEmail(s.coordinator_email, '[LabPulse] Missing from ' + s.code + ' ' + s.name + ' — ' + today,
+          r.missing.length + ' enrolled student(s) did not check in to ' + s.code + ' ' + s.name + ' (' + s.start_time + '–' + s.end_time + ') today:\n\n' +
+          lines.join('\n') + '\n\nOpen LabPulse → My sessions to mark anyone present with a reason.\n\n— LabPulse');
+        Audit.log(null, 'MISSING_LIST', s.id, 'SENT', r.missing.length + ' missing', s.lab_id);
+        sent++;
+      } catch (e) {
+        console.error('Missing-list email failed for ' + s.id + ': ' + e.message);
+      }
+    });
+    return sent;
   },
 
   /** Manual present/absent with a reason; audit-logged. Does not change occupancy. */

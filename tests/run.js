@@ -37,7 +37,7 @@ test('FR-02 registration validates fields and unique roll number', () => {
   assert.strictEqual(unreg.code, 'NOT_REGISTERED');
   const ok = env.as('new@karunya.edu.in')('register', { name: 'New Person', reg_no: 'URK24CS1999', mobile: '+91 98765 00099' });
   assert.ok(ok.ok);
-  assert.strictEqual(ok.data.mobile, '9876500099');
+  assert.strictEqual(ok.data.mobile, '••••••0099', 'only a masked number leaves the server');
   assert.strictEqual(ok.data.role, 'STUDENT');
 });
 
@@ -355,7 +355,7 @@ test('AT-13 poor GPS accuracy gives Amber and lands in the right review queue', 
 
   // Research visits are reviewed by staff; a decline voids the visit and frees the seat.
   scan(env, 's2@karunya.edu.in');
-  const res = checkIn(env, 's2@karunya.edu.in', EDGE, { type: 'RESEARCH', purpose: 'Training a CNN', equipment: 'GPU' });
+  const res = checkIn(env, 's2@karunya.edu.in', EDGE, { type: 'RESEARCH', purpose: 'Training a CNN', equipment: 'GPU', projectId: 'P-S2' });
   assert.strictEqual(res.data.outcome, 'AMBER');
   const sq = env.as('staff@karunya.edu')('reviewQueue', { labId: 'AIIOT' }).data;
   assert.strictEqual(sq.length, 1);
@@ -370,7 +370,7 @@ test('AT-14 a forgotten check-out auto-closes and is labelled', () => {
   scan(env, 's1@karunya.edu.in');
   checkIn(env, 's1@karunya.edu.in', INSIDE); // course ends 12:00, grace 15 min
   scan(env, 's2@karunya.edu.in');
-  checkIn(env, 's2@karunya.edu.in', INSIDE, { type: 'RESEARCH', purpose: 'Thesis experiments', equipment: 'None' });
+  checkIn(env, 's2@karunya.edu.in', INSIDE, { type: 'RESEARCH', purpose: 'Thesis experiments', equipment: 'None', projectId: 'P-S2' });
   env.setIst('2026-10-19', '12:20');
   env.session.active = '';
   assert.strictEqual(env.run('jobAutoClose()').closed, 1);
@@ -558,7 +558,7 @@ test('Proposal: research equipment is chosen from the lab catalog', () => {
   const opts = env.as('s1@karunya.edu.in')('checkinOptions', { labId: 'AIIOT' }).data;
   assert.ok(opts.equipment.includes('RTX 4090') && opts.equipment.includes('LiDAR'));
   scan(env, 's1@karunya.edu.in');
-  const r = checkIn(env, 's1@karunya.edu.in', INSIDE, { type: 'RESEARCH', purpose: 'Point cloud mapping', equipment: 'LiDAR, RTX 4090' });
+  const r = checkIn(env, 's1@karunya.edu.in', INSIDE, { type: 'RESEARCH', purpose: 'Point cloud mapping', equipment: 'LiDAR, RTX 4090', projectId: 'P-S1' });
   assert.strictEqual(r.data.outcome, 'GREEN');
   const stored = JSON.parse(env.rows('Visits')[1][7]);
   assert.strictEqual(stored.equipment, 'LiDAR, RTX 4090');

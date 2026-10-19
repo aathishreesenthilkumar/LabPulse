@@ -8,8 +8,11 @@
  */
 
 // Literals, not ROLES.*: Apps Script may load this file before Config.js.
-var R_ = { STUDENT: 'STUDENT', FACULTY: 'FACULTY', STAFF: 'STAFF' };
+var R_ = { STUDENT: 'STUDENT', FACULTY: 'FACULTY', STAFF: 'STAFF', COORDINATOR: 'COORDINATOR', HOD: 'HOD' };
 var ANY_ = null; // any registered, active user
+var OPS_ = [R_.STAFF, R_.COORDINATOR]; // day-to-day lab operations
+var MGR_ = [R_.COORDINATOR]; // managing facilities and students
+var VIEW_ = [R_.STAFF, R_.COORDINATOR, R_.HOD]; // oversight; HOD is read-only
 
 /**
  * roles:        who may call it (Super Admin always may)
@@ -23,7 +26,7 @@ var ROUTES = {
   // Everyone
   status: { roles: ANY_, fn: function (ctx) { return Attendance.status(ctx); } },
   occupancy: { roles: ANY_, fn: function (ctx, p) { var id = Settings.lab(p.labId).lab_id; return { labId: id, occupancy: Attendance.occupancy(id), pending: Attendance.pending(id) }; } },
-  checkinOptions: { roles: ANY_, fn: function (ctx, p) { return Attendance.options(p.labId); } },
+  checkinOptions: { roles: ANY_, fn: function (ctx, p) { return Attendance.options(p.labId, ctx); } },
   checkIn: { roles: ANY_, fn: function (ctx, p) { return Attendance.checkIn(ctx, p); } },
   checkOut: { roles: ANY_, fn: function (ctx, p) { return Attendance.checkOut(ctx, p); } },
   freeNow: { roles: ANY_, fn: function (ctx, p) { return Assets.freeNow(Settings.lab(p.labId).lab_id); } },
@@ -31,50 +34,71 @@ var ROUTES = {
   labMap: { roles: ANY_, fn: function (ctx, p) { return Monitoring.labMap(p.labId); } },
   myItems: { roles: ANY_, fn: function (ctx) { return Assets.mine(ctx.email); } },
   myHistory: { roles: ANY_, fn: function (ctx) { return Attendance.history(ctx.email, 50); } },
+  myBookings: { roles: ANY_, fn: function (ctx) { return Bookings.mine(ctx.email); } },
+  assetSchedule: { roles: ANY_, fn: function (ctx, p) { return Bookings.schedule(ctx, p); } },
+  cancelBooking: { roles: ANY_, fn: function (ctx, p) { return Bookings.cancel(ctx, p); } },
+  bookAsset: { roles: [R_.STUDENT], configurable: true, fn: function (ctx, p) { return Bookings.book(ctx, p); } },
+  myHours: { roles: ANY_, fn: function (ctx) { return Usage.student(Usage.findUser(ctx.email), { self: true }); } },
+  myProjects: { roles: ANY_, fn: function (ctx) { return Projects.mine(ctx.email); } },
+  projectSave: { roles: ANY_, fn: function (ctx, p) { return Projects.save(ctx, p); } },
+  projectComplete: { roles: ANY_, fn: function (ctx, p) { return Projects.complete(ctx, p); } },
+  projectDetail: { roles: ANY_, fn: function (ctx, p) { return Projects.detail(ctx, p.projectId); } },
 
   // Student
   requestAsset: { roles: [R_.STUDENT], configurable: true, fn: function (ctx, p) { return Assets.request(ctx, p); } },
   cancelRequest: { roles: [R_.STUDENT], configurable: true, fn: function (ctx, p) { return Assets.cancelRequest(ctx, p); } },
   myPassport: { roles: [R_.STUDENT], configurable: true, fn: function (ctx) { return Reports.passport(ctx); } },
 
-  // Faculty
-  facultySessions: { roles: [R_.FACULTY], configurable: true, fn: function (ctx, p) { return Monitoring.facultySessions(ctx, p.labId); } },
-  roster: { roles: [R_.FACULTY], configurable: true, fn: function (ctx, p) { return Monitoring.roster(ctx, p); } },
-  markAttendance: { roles: [R_.FACULTY], configurable: true, fn: function (ctx, p) { return Monitoring.mark(ctx, p); } },
-  sessionLogPdf: { roles: [R_.FACULTY], configurable: true, fn: function (ctx, p) { return Reports.sessionLogPdf(ctx, p); } },
+  // Faculty (Coordinator and HOD can view every session's roster)
+  facultySessions: { roles: [R_.FACULTY, R_.COORDINATOR, R_.HOD], configurable: true, fn: function (ctx, p) { return Monitoring.facultySessions(ctx, p.labId); } },
+  roster: { roles: [R_.FACULTY, R_.COORDINATOR, R_.HOD], configurable: true, fn: function (ctx, p) { return Monitoring.roster(ctx, p); } },
+  markAttendance: { roles: [R_.FACULTY, R_.COORDINATOR], configurable: true, fn: function (ctx, p) { return Monitoring.mark(ctx, p); } },
+  sessionLogPdf: { roles: [R_.FACULTY, R_.COORDINATOR, R_.HOD], configurable: true, fn: function (ctx, p) { return Reports.sessionLogPdf(ctx, p); } },
 
-  // Faculty and staff
-  reviewQueue: { roles: [R_.FACULTY, R_.STAFF], fn: function (ctx, p) { return Attendance.reviewQueue(ctx, p.labId); } },
-  reviewVisit: { roles: [R_.FACULTY, R_.STAFF], fn: function (ctx, p) { return Attendance.review(ctx, p); } },
-  exportRange: { roles: [R_.FACULTY, R_.STAFF], configurable: true, fn: function (ctx, p) { return Reports.exportRange(ctx, p); } },
+  // Reviews and exports
+  reviewQueue: { roles: [R_.FACULTY, R_.STAFF, R_.COORDINATOR], fn: function (ctx, p) { return Attendance.reviewQueue(ctx, p.labId); } },
+  reviewVisit: { roles: [R_.FACULTY, R_.STAFF, R_.COORDINATOR], fn: function (ctx, p) { return Attendance.review(ctx, p); } },
+  exportRange: { roles: [R_.FACULTY, R_.STAFF, R_.COORDINATOR, R_.HOD], configurable: true, fn: function (ctx, p) { return Reports.exportRange(ctx, p); } },
 
-  // Lab staff
-  staffSummary: { roles: [R_.STAFF], configurable: true, fn: function (ctx, p) { return Monitoring.summary(Settings.lab(p.labId).lab_id); } },
-  activity: { roles: [R_.STAFF], configurable: true, fn: function (ctx, p) { return Monitoring.activity(Settings.lab(p.labId).lab_id); } },
-  inside: { roles: [R_.STAFF], configurable: true, fn: function (ctx, p) { return Monitoring.inside(Settings.lab(p.labId).lab_id); } },
-  handshake: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.handshake(Settings.lab(p.labId).lab_id); } },
-  issueAsset: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.issue(ctx, p); } },
-  rejectRequest: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.reject(ctx, p); } },
-  returnAsset: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.markReturn(ctx, p); } },
-  inventory: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.inventory(Settings.lab(p.labId).lab_id); } },
-  inventorySave: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.save(ctx, p); } },
-  inventoryRemove: { roles: [R_.STAFF], fn: function (ctx, p) { return Assets.remove(ctx, p); } },
-  manualEntry: { roles: [R_.STAFF], fn: function (ctx, p) { return Attendance.manualEntry(ctx, p); } },
-  forceCheckOut: { roles: [R_.STAFF], fn: function (ctx, p) { return Attendance.forceCheckOut(ctx, p); } },
-  reportDaily: { roles: [R_.STAFF], configurable: true, fn: function (ctx, p) { return Api.report(ctx, p, false); } },
-  reportPeriod: { roles: [R_.STAFF], configurable: true, fn: function (ctx, p) { return Api.report(ctx, p, false); } },
-  reportPdf: { roles: [R_.STAFF], configurable: true, fn: function (ctx, p) { return Api.report(ctx, p, true); } },
-  emailDigest: { roles: [R_.STAFF], fn: function (ctx, p) { return Api.emailDigest(ctx, p); } },
-  monitorTick: { roles: [R_.STAFF], fn: function (ctx, p) { return Monitoring.monitorTick(p.labId); } },
-  sessions: { roles: [R_.STAFF], fn: function (ctx, p) { return Api.sessions(p.labId); } },
-  sessionSave: { roles: [R_.STAFF], fn: function (ctx, p) { return Api.sessionSave(ctx, p); } },
+  // Oversight: staff, coordinator and HOD (read-only)
+  staffSummary: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.summary(Settings.lab(p.labId).lab_id); } },
+  activity: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.activity(Settings.lab(p.labId).lab_id); } },
+  inside: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.inside(Settings.lab(p.labId).lab_id); } },
+  lookupStudent: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Usage.student(p.q); } },
+  lookupAsset: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Usage.asset(p.assetId); } },
+  inventory: { roles: VIEW_, fn: function (ctx, p) { return Assets.inventory(Settings.lab(p.labId).lab_id); } },
+  projects: { roles: [R_.STAFF, R_.COORDINATOR, R_.HOD, R_.FACULTY], configurable: true, fn: function (ctx, p) { return Projects.list(Settings.lab(p.labId).lab_id, p); } },
+  sessions: { roles: VIEW_, fn: function (ctx, p) { return Api.sessions(p.labId); } },
+  reportDaily: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Api.report(ctx, p, false); } },
+  reportPeriod: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Api.report(ctx, p, false); } },
+  reportPdf: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Api.report(ctx, p, true); } },
+
+  // Lab operations: staff and coordinator
+  bookingsToday: { roles: VIEW_, fn: function (ctx, p) { return Bookings.today(Settings.lab(p.labId).lab_id); } },
+  startBooking: { roles: OPS_, fn: function (ctx, p) { return Bookings.start(ctx, p); } },
+  finishBooking: { roles: OPS_, fn: function (ctx, p) { return Bookings.finish(ctx, p); } },
+  handshake: { roles: OPS_, fn: function (ctx, p) { return Assets.handshake(Settings.lab(p.labId).lab_id); } },
+  issueAsset: { roles: OPS_, fn: function (ctx, p) { return Assets.issue(ctx, p); } },
+  rejectRequest: { roles: OPS_, fn: function (ctx, p) { return Assets.reject(ctx, p); } },
+  returnAsset: { roles: OPS_, fn: function (ctx, p) { return Assets.markReturn(ctx, p); } },
+  manualEntry: { roles: OPS_, fn: function (ctx, p) { return Attendance.manualEntry(ctx, p); } },
+  forceCheckOut: { roles: OPS_, fn: function (ctx, p) { return Attendance.forceCheckOut(ctx, p); } },
+  emailDigest: { roles: OPS_, fn: function (ctx, p) { return Api.emailDigest(ctx, p); } },
+  monitorTick: { roles: OPS_, fn: function (ctx, p) { return Monitoring.monitorTick(p.labId); } },
+
+  // Lab management: coordinator adds/removes facilities and students
+  inventorySave: { roles: MGR_, fn: function (ctx, p) { return Assets.save(ctx, p); } },
+  inventoryRemove: { roles: MGR_, fn: function (ctx, p) { return Assets.remove(ctx, p); } },
+  sessionSave: { roles: MGR_, fn: function (ctx, p) { return Api.sessionSave(ctx, p); } },
+  students: { roles: MGR_, fn: function () { return Auth.listStudents(); } },
+  manageStudent: { roles: MGR_, fn: function (ctx, p) { return Auth.manageStudent(ctx, p); } },
 
   // Super Admin only
   settingsGet: { roles: [], fn: function () { return Api.settingsGet(); } },
   saveLab: { roles: [], fn: function (ctx, p) { return Settings.saveLab(ctx, p); } },
   saveGlobal: { roles: [], fn: function (ctx, p) { return Settings.saveGlobal(ctx, p); } },
   savePermissions: { roles: [], fn: function (ctx, p) { return Settings.savePermissionOverrides(ctx, p.overrides); } },
-  users: { roles: [], fn: function () { return Auth.listUsers(); } },
+  users: { roles: [], fn: function () { return Auth.listUsers(true); } },
   saveUser: { roles: [], fn: function (ctx, p) { return Auth.saveUser(ctx, p); } },
   audit: { roles: [], fn: function (ctx, p) { return Audit.query(p); } },
   runJob: { roles: [], fn: function (ctx, p) { return Api.runJob(ctx, p); } },
@@ -132,6 +156,7 @@ var Api = {
       pollMs: g.dashboard_poll_ms,
       monitorPollMs: g.monitor_poll_ms,
       defaultLoanHours: g.default_loan_hours,
+      maxBookingHours: g.max_booking_hours,
       maxLoanHours: g.max_loan_hours,
       version: APP.VERSION
     };
@@ -247,6 +272,10 @@ var Api = {
     var jobs = {
       reconcile: function () { return Attendance.reconcile(); },
       autoClose: function () { return Attendance.autoCloseSweep(); },
+      bookings: function () { return Bookings.sweep(); },
+      rollup: function () { return Usage.nightly(); },
+      encrypt: function () { return Crypto.migrate(); },
+      archive: function () { return Usage.archive(); },
       overdue: function () { return Assets.overdueCheck(); },
       digest: function () { return runDailyDigests_(true); },
       backup: function () { return backupSpreadsheet_(); }

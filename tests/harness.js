@@ -112,7 +112,7 @@ function createEnv() {
     Date: FakeDate,
     JSON, Math, Object, Array, String, Number, Error, RegExp, isFinite, isNaN, parseInt, parseFloat,
     SpreadsheetApp: {
-      openById: () => ss,
+      openById: (id) => created.find((s) => s.getId() === id) || ss,
       getActiveSpreadsheet: () => ss,
       create: (name) => {
         const extra = makeSpreadsheet('SS-' + name);
@@ -144,6 +144,7 @@ function createEnv() {
     Utilities: {
       getUuid: () => crypto.randomUUID(),
       computeHmacSha256Signature: (value, key) => Array.from(crypto.createHmac('sha256', key).update(value).digest()).map((b) => (b > 127 ? b - 256 : b)),
+      base64DecodeWebSafe: (s) => Array.from(Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64')).map((b) => (b > 127 ? b - 256 : b)),
       base64EncodeWebSafe: (bytes) => Buffer.from(bytes.map((b) => (b < 0 ? b + 256 : b))).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       newBlob: (data, type, name) => ({ data, type, name, getAs: () => ({ setName() { return this; } }) })
     },

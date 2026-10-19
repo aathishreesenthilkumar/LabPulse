@@ -86,7 +86,7 @@
       return badge('gray', v.confidence || '—');
     }
     function assetBadge(s) {
-      var m = { AVAILABLE: ['green', 'Available'], RESERVED: ['amber', 'Reserved'], ISSUED: ['blue', 'Issued'], UNAVAILABLE: ['gray', 'Unavailable'], MAINTENANCE: ['gray', 'Maintenance'], RETIRED: ['gray', 'Retired'] }[s] || ['gray', s];
+      var m = { IN_USE: ['blue', 'In use'], AVAILABLE: ['green', 'Available'], RESERVED: ['amber', 'Reserved'], ISSUED: ['blue', 'Issued'], UNAVAILABLE: ['gray', 'Unavailable'], MAINTENANCE: ['gray', 'Maintenance'], RETIRED: ['gray', 'Retired'] }[s] || ['gray', s];
       return badge(m[0], m[1]);
     }
     function closeLabel(t) {
@@ -209,16 +209,23 @@
 
     /* ================= shell ================= */
 
+    var ROLE_NAMES = { STUDENT: 'Student', FACULTY: 'Faculty', STAFF: 'Lab staff', COORDINATOR: 'Lab coordinator', HOD: 'HOD', SUPER_ADMIN: 'Super Admin' };
+    var ROLE_OPTIONS = ['STUDENT', 'FACULTY', 'STAFF', 'COORDINATOR', 'HOD', 'SUPER_ADMIN'].map(function (r) { return [r, ROLE_NAMES[r]]; });
+
     var TABS = [
       { id: 'home', label: 'Home', show: function () { return role() === 'STUDENT'; }, view: viewHome },
+      { id: 'projects', label: 'My projects', show: function () { return role() === 'STUDENT'; }, view: viewProjects },
       { id: 'history', label: 'My history', show: function () { return role() === 'STUDENT'; }, view: viewHistory },
       { id: 'live', label: 'Live', show: function () { return can('staffSummary'); }, view: viewLive },
       { id: 'sessions', label: 'My sessions', show: function () { return can('facultySessions'); }, view: viewFaculty },
       { id: 'reviews', label: 'Reviews', show: function () { return can('reviewQueue'); }, view: viewReviews },
       { id: 'inventory', label: 'Inventory', show: function () { return can('inventory'); }, view: viewInventory },
       { id: 'courses', label: 'Courses & events', show: function () { return can('sessions'); }, view: viewCourses },
+      { id: 'lookup', label: 'Lookup', show: function () { return can('lookupStudent') || can('lookupAsset'); }, view: viewLookup },
+      { id: 'labprojects', label: 'Projects', show: function () { return role() !== 'STUDENT' && can('projects'); }, view: viewProjects },
       { id: 'reports', label: 'Reports', show: function () { return can('reportDaily') || can('exportRange'); }, view: viewReports },
       { id: 'settings', label: 'Settings', show: function () { return can('settingsGet'); }, view: viewSettings },
+      { id: 'students', label: 'Students', show: function () { return can('students') && !can('users'); }, view: viewStudents },
       { id: 'people', label: 'People', show: function () { return can('users'); }, view: viewPeople },
       { id: 'audit', label: 'Audit', show: function () { return can('audit'); }, view: viewAudit }
     ];
@@ -227,7 +234,7 @@
     function header() {
       var me = S.init.me;
       var labs = S.init.labs || [];
-      var roleName = { STUDENT: 'Student', FACULTY: 'Faculty', STAFF: 'Lab staff', SUPER_ADMIN: 'Super Admin' }[me.role] || '';
+      var roleName = ROLE_NAMES[me.role] || '';
       return '<header class="bg-white border-b border-slate-200 sticky top-0 z-30">' +
         '<div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">' +
         '<div class="flex items-center gap-2 mr-auto"><div class="w-8 h-8 rounded-lg bg-teal-700 text-white grid place-items-center font-black">L</div>' +
@@ -313,7 +320,8 @@
         expiresAt: Date.now() + (claim.expiresInSec || 300) * 1000,
         step: 'form',
         loc: { state: 'pending' },
-        reason: { type: null, sessionId: '', purpose: '', equipment: '', equip: [], manual: false, m_code: '', m_name: '', m_coord: '', m_hours: '' },
+        reason: { type: null, sessionId: '', purpose: '', equipment: '', equip: [], manual: false, m_code: '', m_name: '', m_coord: '', m_hours: '',
+          systemId: '', projectId: '', newProject: false, np_title: '', np_end: '', np_desc: '' },
         options: null,
         result: null,
         error: null,
@@ -396,8 +404,40 @@
           : r.m_name.trim().length >= 3 && r.m_coord.trim().length >= 3);
       }
       if (r.type === 'COURSE' || r.type === 'EVENT') return !!r.sessionId;
-      if (r.type === 'RESEARCH') return r.purpose.trim().length >= 5 && equipmentText().length > 0;
+      if (r.type === 'RESEARCH') {
+        var hasProject = r.newProject ? r.np_title.trim().length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(r.np_end) : !!r.projectId;
+        return r.purpose.trim().length >= 5 && equipmentText().length > 0 && hasProject;
+      }
       return false;
+    }
+
+    function chip(act, id, label, on, extra) {
+      return '<button type="button" class="rounded-full border px-3 py-1 text-sm ' + (on ? 'bg-teal-50 border-teal-600 text-teal-800 font-semibold' : 'bg-white border-slate-300') +
+        '" aria-pressed="' + on + '" data-act="' + act + '" data-id="' + esc(id) + '">' + (on ? '✓ ' : '') + esc(label) + (extra || '') + '</button>';
+    }
+
+    /** Step 3: which system the student works at, and (for extra hours) which project. */
+    function workFields() {
+      var c = S.checkin;
+      var r = c.reason;
+      if (!r.type || !c.options) return '';
+      var systems = (c.options.systems || []).map(function (s) {
+        return chip('ci-system', s.asset_id, s.name, r.systemId === s.asset_id, s.in_use ? ' <span class="text-xs text-amber-700">· in use</span>' : '');
+      }).join('') + chip('ci-system', 'OWN', 'Own laptop', r.systemId === 'OWN');
+      var html = '<div><span class="lp-label">Which system are you working on? (optional)</span><div class="flex flex-wrap gap-2">' + systems + '</div></div>';
+      if (r.type === 'RESEARCH') {
+        var projects = (c.options.projects || []).map(function (p) {
+          return '<button type="button" class="lp-option" aria-pressed="' + (!r.newProject && r.projectId === p.project_id) + '" data-act="ci-project" data-id="' + esc(p.project_id) + '">' +
+            '<div class="font-semibold">' + esc(p.title) + '</div><div class="text-xs text-slate-500">until ' + esc(p.end_date) + '</div></button>';
+        }).join('');
+        html += '<div class="mt-4"><span class="lp-label">Which project is this time for?</span><div class="grid gap-2">' + projects +
+          '<button type="button" class="lp-option" aria-pressed="' + r.newProject + '" data-act="ci-project" data-id="NEW"><div class="font-semibold">+ New project</div><div class="text-xs text-slate-500">Title and timeline; you can add details later</div></button></div>' +
+          (r.newProject ? '<div class="space-y-3 mt-3">' +
+            field('Project title', '<input class="lp-input" data-bind="np_title" placeholder="e.g. Smart irrigation with ESP32" value="' + esc(r.np_title) + '">') +
+            field('Expected end date (timeline)', '<input class="lp-input" type="date" data-bind="np_end" value="' + esc(r.np_end) + '">') +
+            field('Short description (optional)', '<textarea class="lp-input" rows="2" data-bind="np_desc">' + esc(r.np_desc) + '</textarea>') + '</div>' : '') + '</div>';
+      }
+      return html;
     }
     function paintSubmit() {
       var b = document.getElementById('ci-submit');
@@ -482,8 +522,9 @@
         '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">2 · Why are you here?</div><div class="grid gap-2">' +
         opt('COURSE', 'Regular lab course', 'Course code, name and session hours fill in from the timetable') +
         opt('EVENT', 'Event / workshop', 'Event name, coordinator and expected duration') +
-        opt('RESEARCH', 'Individual research', 'Your purpose and the equipment you need') +
+        opt('RESEARCH', 'Individual research / extra hours', 'Your project, today’s purpose and the equipment you need') +
         '</div><div id="ci-fields">' + reasonFields() + '</div></div>' +
+        (r.type ? '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">3 · What are you working on?</div>' + workFields() + '</div>' : '') +
         (c.error ? '<div class="rounded-lg bg-red-50 text-red-800 text-sm p-3">' + esc(c.error.message) + '</div>' : '') +
         '<div class="sticky bottom-0 bg-slate-100 pt-2 pb-4"><button class="lp-btn lp-btn-primary w-full !py-3 text-base" id="ci-submit" data-act="ci-submit" disabled>Check in</button>' +
         '<p id="ci-hint" class="text-center text-xs text-slate-500 mt-2"></p></div>'
@@ -512,17 +553,33 @@
     function submitCheckin() {
       var c = S.checkin;
       if (!c.loc.best || !reasonComplete()) return;
+      var r0 = c.reason;
+      if (r0.type === 'RESEARCH' && r0.newProject) {
+        c.step = 'submitting';
+        renderCheckin();
+        return call('projectSave', { lab_id: c.claim.labId, title: r0.np_title, end_date: r0.np_end, description: r0.np_desc }).then(function (p) {
+          r0.projectId = p.project_id;
+          r0.newProject = false;
+          c.options.projects = (c.options.projects || []).concat([{ project_id: p.project_id, title: p.title, end_date: p.end_date }]);
+          c.step = 'form';
+          submitCheckin();
+        }, function (e) {
+          c.step = 'form';
+          c.error = e;
+          renderCheckin();
+        });
+      }
       c.requestId = c.requestId || rid();
       var b = c.loc.best;
       var r = c.reason;
       var payload = {
         labId: c.claim.labId, lat: b.lat, lng: b.lng, accuracy: b.accuracy, mock: b.mock, posAgeMs: Date.now() - b.ts,
         requestId: c.requestId,
-        reason: r.type === 'RESEARCH' ? { type: r.type, purpose: r.purpose, equipment: equipmentText() }
+        reason: Object.assign(r.type === 'RESEARCH' ? { type: r.type, purpose: r.purpose, equipment: equipmentText(), projectId: r.projectId }
           : r.manual ? { type: r.type, manual: r.type === 'COURSE'
             ? { code: r.m_code, name: r.m_name, hours: Number(r.m_hours) }
             : { event_name: r.m_name, coordinator: r.m_coord, hours: Number(r.m_hours) } }
-          : { type: r.type, sessionId: r.sessionId }
+          : { type: r.type, sessionId: r.sessionId }, { systemId: r.systemId })
       };
       c.step = 'submitting';
       c.error = null;
@@ -555,6 +612,12 @@
         section('myitems', { live: true, load: function () { return call('myItems'); }, html: htmlMyItems }) +
         '</div>' +
         section('map', { live: true, height: 160, load: function () { return call('labMap', { labId: studentLab() }); }, html: htmlMap }) +
+        section('myhours', { load: function () { return call('myHours'); }, html: function (h) {
+          var tile = function (label, v) { return '<div><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-2xl font-bold text-teal-800">' + v + '</div></div>'; };
+          return card('My lab time', '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">' + tile('Total hours', h.total_hours) + tile('Days in lab', h.total_days) +
+            tile('This week (h)', h.week_hours) + tile('Last visit', h.last_visit || '—') + '</div>');
+        } }) +
+        section('mybookings', { live: true, load: function () { return call('myBookings'); }, html: htmlMyBookings }) +
         section('recent', { load: function () { return call('myHistory'); }, html: function (d) { return card('Recent visits', htmlVisits(d.slice(0, 5))); } });
     }
 
@@ -594,6 +657,39 @@
         (inLab ? '' : '<span class="text-xs text-slate-500">' + (pendingNote ? 'You can request equipment once your check-in is confirmed.' : 'You can request equipment while you are checked in to the lab.') + '</span>') + '</div>');
     }
 
+    function bookingBadge(b) {
+      return {
+        BOOKED: badge('green', 'Confirmed'), WAITLIST: badge('amber', 'Waitlist #' + b.position), IN_USE: badge('blue', 'In use'),
+        DONE: badge('gray', 'Done'), CANCELLED: badge('gray', 'Cancelled'), NO_SHOW: badge('red', 'No-show'), EXPIRED: badge('gray', 'Expired')
+      }[b.status] || badge('gray', b.status);
+    }
+    function slotText(b) { return fmtDT(b.start_at) + '–' + fmtTime(b.end_at); }
+
+    function htmlMyBookings(list) {
+      var rows = list.map(function (b) {
+        var open = b.status === 'BOOKED' || b.status === 'WAITLIST';
+        return '<li class="flex items-center justify-between gap-2 py-2"><div><div class="font-medium">' + esc(b.asset_name) + '</div>' +
+          '<div class="text-xs text-slate-500">' + esc(slotText(b)) + ' · ' + esc(b.purpose || '') + '</div>' +
+          (b.status === 'WAITLIST' ? '<div class="text-xs text-amber-800">You are number ' + b.position + ' in the queue. We email you if the slot frees up.</div>' : '') +
+          (b.status === 'BOOKED' ? '<div class="text-xs text-teal-800">Check in to the lab at that time; lab staff start your session.</div>' : '') + '</div>' +
+          '<div class="flex items-center gap-2">' + bookingBadge(b) + (open ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="booking-cancel" data-id="' + esc(b.booking_id) + '">Cancel</button>' : '') + '</div></li>';
+      });
+      return card('My reservations', (rows.length ? '<ul class="divide-y divide-slate-100">' + rows.join('') + '</ul>' : empty('No reservations. Reserve a 3D printer, drone or GPU node for a time slot.')),
+        can('bookAsset') ? '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="booking-new">Reserve a slot</button>' : '');
+    }
+
+    function htmlBookingsToday(list) {
+      var act = can('startBooking');
+      return card('Today’s reservations', list.length ? '<ul class="space-y-2">' + list.map(function (b) {
+        return '<li class="rounded-lg bg-slate-50 p-3 text-sm"><div class="flex justify-between gap-2"><b>' + esc(b.asset_name) + '</b>' + bookingBadge(b) + '</div>' +
+          '<div class="text-xs text-slate-600">' + esc(fmtTime(b.start_at) + '–' + fmtTime(b.end_at)) + ' · ' + esc(b.user_name) + ' · ' + esc(b.reg_no) +
+          (b.status === 'BOOKED' ? (b.checked_in ? ' · ' + 'in the lab' : ' · not checked in yet') : '') + '</div>' +
+          '<div class="text-xs text-slate-500">' + esc(b.purpose || '') + '</div>' +
+          (act && b.status === 'BOOKED' ? '<button class="lp-btn lp-btn-primary lp-btn-sm mt-2" data-act="booking-start" data-id="' + esc(b.booking_id) + '"' + (b.checked_in ? '' : ' disabled title="The student must check in first"') + '>Start session</button>' : '') +
+          (act && b.status === 'IN_USE' ? '<button class="lp-btn lp-btn-ghost lp-btn-sm mt-2" data-act="booking-finish" data-id="' + esc(b.booking_id) + '" data-name="' + esc(b.asset_name) + '">Finish session</button>' : '') + '</li>';
+      }).join('') + '</ul>' : empty('No reservations today.'));
+    }
+
     function htmlMyItems(d) {
       var open = d.loans.filter(function (l) { return l.status !== 'RETURNED'; });
       var pending = d.requests.filter(function (r) { return r.status === 'PENDING'; });
@@ -612,7 +708,7 @@
       var grid = [];
       for (var y = 0; y < m.rows; y++) for (var x = 0; x < m.cols; x++) grid.push(null);
       m.cells.forEach(function (c) { if (c.map_y < m.rows && c.map_x < m.cols) grid[c.map_y * m.cols + c.map_x] = c; });
-      var color = { AVAILABLE: 'lp-green', RESERVED: 'lp-amber', ISSUED: 'lp-blue', UNAVAILABLE: 'lp-gray' };
+      var color = { AVAILABLE: 'lp-green', RESERVED: 'lp-amber', ISSUED: 'lp-blue', IN_USE: 'lp-blue', UNAVAILABLE: 'lp-gray' };
       var cells = grid.map(function (c) {
         if (!c) return '<div class="lp-cell"></div>';
         return '<div class="lp-cell has ' + (color[c.status] || 'lp-gray') + '" title="' + esc(c.name + ' — ' + c.status) + '">' + esc(c.asset_id) + '</div>';
@@ -629,6 +725,82 @@
           v.check_out_at ? fmtTime(v.check_out_at) : '<span class="text-teal-700 font-semibold">inside</span>',
           v.status === 'VOIDED' ? '—' : dur(v.duration_ms), visitBadge(v) + (v.close_type && v.close_type !== 'MANUAL' ? '<div class="text-xs text-slate-500 mt-1">' + esc(closeLabel(v.close_type)) + '</div>' : '')];
       }));
+    }
+
+    /* ================= projects (title, timeline, outcome) ================= */
+
+    function projectStatus(p) {
+      if (p.status === 'COMPLETED') return badge('green', 'Completed');
+      if (p.status === 'DROPPED') return badge('gray', 'Dropped');
+      return p.overdue ? badge('red', 'Past end date') : badge('blue', 'Active');
+    }
+
+    function viewProjects() {
+      if (role() !== 'STUDENT' && can('projects')) {
+        return section('labprojects', { load: function () { return call('projects', { labId: S.lab }); }, html: function (list) {
+          return card('Projects in this lab', list.length ? table(['Project', 'Owner', 'Timeline', 'Hours', 'Status', 'Outcome', ''], list.map(function (p) {
+            return ['<b>' + esc(p.title) + '</b>' + (p.members.length ? '<div class="text-xs text-slate-500">+ ' + p.members.length + ' member(s)</div>' : ''),
+              esc(p.owner_name || p.owner_email) + '<div class="text-xs text-slate-500">' + esc(p.owner_reg_no) + '</div>',
+              esc(p.start_date + ' → ' + p.end_date), p.hours, projectStatus(p), esc((p.outcome || '').slice(0, 80)),
+              '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="project-open" data-id="' + esc(p.project_id) + '">Work log</button>'];
+          })) : empty('No projects in this lab yet.'));
+        } });
+      }
+      return section('myprojects', { load: function () { return call('myProjects'); }, html: function (list) {
+        S.myProjects = list;
+        return card('My projects', (list.length ? '<div class="grid md:grid-cols-2 gap-3">' + list.map(function (p) {
+          return '<div class="rounded-xl border border-slate-200 p-4"><div class="flex justify-between gap-2"><div class="font-semibold">' + esc(p.title) + '</div>' + projectStatus(p) + '</div>' +
+            '<div class="text-xs text-slate-500 mt-1">' + esc(p.start_date + ' → ' + p.end_date) + ' · ' + p.hours + ' h logged</div>' +
+            (p.description ? '<p class="text-sm text-slate-700 mt-2">' + esc(p.description) + '</p>' : '') +
+            (p.outcome ? '<p class="text-sm mt-2"><b>Outcome:</b> ' + esc(p.outcome) + (p.outcome_link ? ' <a class="text-teal-700 underline" target="_blank" href="' + esc(p.outcome_link) + '">link</a>' : '') + '</p>' : '') +
+            '<div class="flex flex-wrap gap-2 mt-3"><button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="project-open" data-id="' + esc(p.project_id) + '">Work log</button>' +
+            (p.status === 'ACTIVE' ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="project-edit" data-id="' + esc(p.project_id) + '">Edit</button>' +
+              '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="project-complete" data-id="' + esc(p.project_id) + '">Submit outcome</button>' : '') + '</div></div>';
+        }).join('') + '</div>' : empty('No projects yet. Create one to log your extra hours against it.')),
+          '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="project-edit">New project</button>');
+      } });
+    }
+
+    function projectForm(p) {
+      p = p || { start_date: todayKey(), members: [] };
+      return (p.project_id ? '<input type="hidden" name="project_id" value="' + esc(p.project_id) + '">' : '') +
+        field('Title', input('title', p.title, 'required')) +
+        field('Description', '<textarea class="lp-input" name="description" rows="3">' + esc(p.description || '') + '</textarea>') +
+        '<div class="grid grid-cols-2 gap-3">' + field('Start date', input('start_date', p.start_date, 'type="date" required')) + field('Expected end date', input('end_date', p.end_date, 'type="date" required')) + '</div>' +
+        field('Team members (emails, optional)', '<textarea class="lp-input" name="members" rows="2" placeholder="one per line">' + esc((p.members || []).join('\n')) + '</textarea>');
+    }
+
+    /* ================= lookups ================= */
+
+    function viewLookup() {
+      return '<div class="grid lg:grid-cols-2 gap-4 items-start">' +
+        (can('lookupStudent') ? card('Student by register number', '<form id="lookup-student" class="flex gap-2"><input class="lp-input" name="q" required placeholder="URK24CS1249 or email" value="' + esc(S.lookupQ || '') + '"><button class="lp-btn lp-btn-primary">Look up</button></form><div id="lookup-student-out" class="mt-4"></div>') : '') +
+        (can('lookupAsset') ? section('lookupassets', { load: function () { return call('inventory', { labId: S.lab }); }, html: function (list) {
+          return card('System or equipment', '<form id="lookup-asset" class="flex gap-2">' + select('assetId', list.map(function (a) { return [a.asset_id, a.asset_id + ' — ' + a.name]; }), S.lookupAsset || '') +
+            '<button class="lp-btn lp-btn-primary">Look up</button></form><div id="lookup-asset-out" class="mt-4"></div>');
+        } }) : '') + '</div>';
+    }
+
+    function htmlStudentLookup(r) {
+      var tile = function (label, v) { return '<div class="lp-card p-3"><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-xl font-bold">' + esc(v) + '</div></div>'; };
+      return '<div class="space-y-3"><div><div class="font-semibold text-lg">' + esc(r.user.name || r.user.email) + '</div><div class="text-sm text-slate-500">' + esc(r.user.reg_no) + ' · ' + esc(r.user.email) + (r.user.active ? '' : ' · ' + badge('gray', 'Removed')) + '</div></div>' +
+        '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2">' + tile('Days in lab', r.total_days) + tile('Total hours', r.total_hours) + tile('Visits', r.total_visits) + tile('Last 7 days (h)', r.week_hours) + '</div>' +
+        (r.projects.length ? '<div><div class="text-sm font-semibold mb-1">Projects</div>' + table(['Project', 'Timeline', 'Hours', 'Status'], r.projects.map(function (p) {
+          return [esc(p.title), esc(p.start_date + ' → ' + p.end_date), p.hours, projectStatus(p)];
+        })) + '</div>' : '') +
+        '<div><div class="text-sm font-semibold mb-1">Day by day</div>' + (r.days.length ? table(['Date', 'Hours', 'Visits', 'Systems', 'Projects'], r.days.map(function (d) {
+          return [esc(d.date), d.hours, d.visits, esc(d.systems.join(', ') || '—'), esc(d.projects.join(', ') || '—')];
+        })) : empty('No lab visits yet.')) + '</div></div>';
+    }
+
+    function htmlAssetLookup(r) {
+      var tile = function (label, v) { return '<div class="lp-card p-3"><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-xl font-bold">' + esc(v) + '</div></div>'; };
+      return '<div class="space-y-3"><div><div class="font-semibold text-lg">' + esc(r.asset.name) + '</div><div class="text-sm text-slate-500">' + esc(r.asset.asset_id + ' · ' + r.asset.type) + ' · ' + assetBadge(r.asset.status) + '</div></div>' +
+        '<div class="grid grid-cols-3 gap-2">' + tile('People', r.distinct_users) + tile('Uses', r.total_uses) + tile('Hours', r.total_hours) + '</div>' +
+        (r.people.length ? '<p class="text-sm"><b>Used by:</b> ' + esc(r.people.join(', ')) + '</p>' : '') +
+        (r.uses.length ? table(['Date', 'Who', 'Reg. no', 'Hours', 'Purpose / project', 'How'], r.uses.map(function (u) {
+          return [esc(u.date), esc(u.who), esc(u.reg_no), u.hours, esc(u.purpose || ''), esc(u.kind)];
+        })) : empty('Nobody has used it yet.')) + '</div>';
     }
 
     function viewHistory() {
@@ -683,10 +855,11 @@
         '<div class="grid sm:grid-cols-3 gap-4">' +
         col('Present', 'green', r.present, function (x) { return markBtn(x, 'ABSENT', 'Absent'); }) +
         col('Pending review', 'amber', r.pending, function () { return ''; }) +
-        col('Not yet arrived', 'gray', r.notArrived.concat(r.absent), function (x) { return markBtn(x, 'PRESENT', 'Present'); }) +
+        col(d.ended ? 'Missing' : 'Not yet arrived', d.ended ? 'red' : 'gray', r.notArrived.concat(r.absent), function (x) { return markBtn(x, 'PRESENT', 'Present'); }) +
         '</div><div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-slate-100">' +
         '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="session-csv">Export session log (CSV)</button>' +
-        '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="session-pdf">Export session log (PDF)</button></div>',
+        '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="session-pdf">Export session log (PDF)</button>' +
+        '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="missing-csv"' + (d.missing.length ? '' : ' disabled') + '>Download missing list (' + d.missing.length + ')</button></div>',
         '<input type="date" class="lp-input !w-auto !py-1 text-sm" id="roster-date" value="' + esc(d.date) + '">');
     }
 
@@ -722,8 +895,9 @@
       section('activity', { live: true, height: 300, load: function () { return call('activity', { labId: S.lab }); }, html: htmlActivity }) +
       '<div class="space-y-4">' + section('smap', { live: true, height: 200, load: function () { return call('labMap', { labId: S.lab }); }, html: htmlMap }) +
       section('inside', { live: true, load: function () { return call('inside', { labId: S.lab }); }, html: htmlInside }) + '</div>' +
-      section('handshake', { live: true, height: 300, load: function () { return call('handshake', { labId: S.lab }); }, html: htmlHandshake }) +
-      '</div>';
+      '<div class="space-y-4">' + (can('bookingsToday') ? section('bookings', { live: true, load: function () { return call('bookingsToday', { labId: S.lab }); }, html: htmlBookingsToday }) : '') +
+      (can('handshake') ? section('handshake', { live: true, height: 300, load: function () { return call('handshake', { labId: S.lab }); }, html: htmlHandshake }) : '') +
+      '</div></div>';
     }
 
     function htmlActivity(list) {
@@ -742,11 +916,12 @@
     }
 
     function htmlInside(list) {
-      return card('Inside now', (list.length ? '<ul class="divide-y divide-slate-100 max-h-72 overflow-y-auto">' + list.map(function (p) {
+      return card('Who’s in the lab', (list.length ? '<ul class="divide-y divide-slate-100 max-h-96 overflow-y-auto">' + list.map(function (p) {
         return '<li class="py-2 text-sm flex items-center justify-between gap-2"><div><div class="font-medium">' + esc(p.name) + ' ' + visitBadge(p) + '</div>' +
-          '<div class="text-xs text-slate-500">' + esc(p.reg_no) + ' · ' + esc(entryLabel(p.entry_type)) + ' · ' + dur(p.duration_ms) + '</div></div>' +
-          '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="force-out" data-id="' + esc(p.visit_id) + '" data-name="' + esc(p.name) + '">Check out</button></li>';
-      }).join('') + '</ul>' : empty('Nobody is checked in.')), '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="manual-entry">Manual entry</button>');
+          '<div class="text-xs text-slate-500">' + esc(p.reg_no) + ' · ' + esc(entryLabel(p.entry_type)) + ' · ' + dur(p.duration_ms) + '</div>' +
+          '<div class="text-xs mt-0.5">🖥 ' + esc(p.system) + (p.project ? ' · 📁 ' + esc(p.project) : '') + '</div></div>' +
+          (can('forceCheckOut') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="force-out" data-id="' + esc(p.visit_id) + '" data-name="' + esc(p.name) + '">Check out</button>' : '') + '</li>';
+      }).join('') + '</ul>' : empty('Nobody is checked in.')), can('manualEntry') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="manual-entry">Manual entry</button>' : '');
     }
 
     function htmlHandshake(d) {
@@ -773,9 +948,9 @@
         return card('Inventory', list.length ? table(['ID', 'Name', 'Category', 'Type', 'Status', 'Condition', 'Location', 'Map', ''], list.map(function (a) {
           return [esc(a.asset_id), esc(a.name), esc(a.category), esc(a.type), assetBadge(a.status), esc(a.condition), esc(a.location),
             a.map_x !== '' && a.map_y !== '' ? esc(a.map_x + ',' + a.map_y) : '—',
-            '<div class="flex gap-1"><button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="asset-edit" data-id="' + esc(a.asset_id) + '">Edit</button>' +
-            '<button class="lp-btn lp-btn-danger lp-btn-sm" data-act="asset-remove" data-id="' + esc(a.asset_id) + '">Remove</button></div>'];
-        })) : empty('No items in this lab yet.'), '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="asset-edit">Add item</button>');
+            can('inventorySave') ? '<div class="flex gap-1"><button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="asset-edit" data-id="' + esc(a.asset_id) + '">Edit</button>' +
+            '<button class="lp-btn lp-btn-danger lp-btn-sm" data-act="asset-remove" data-id="' + esc(a.asset_id) + '">Remove</button></div>' : ''];
+        })) : empty('No items in this lab yet.'), can('inventorySave') ? '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="asset-edit">Add item</button>' : badge('gray', 'View only'));
       } });
     }
 
@@ -805,8 +980,8 @@
           return [esc(s.type), esc(s.code), esc(s.name), esc(s.coordinator_name || s.coordinator_email),
             esc(s.type === 'COURSE' ? s.days + ' ' + s.start_time + '–' + s.end_time : s.start_date + ' → ' + s.end_date + (s.start_time ? ' ' + s.start_time + '–' + s.end_time : '')),
             s.enrolled.length, s.active ? badge('green', 'Active') : badge('gray', 'Inactive'),
-            '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="course-edit" data-id="' + esc(s.id) + '">Edit</button>'];
-        })) : empty('No courses or events yet.'), '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="course-edit">Add</button>');
+            can('sessionSave') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="course-edit" data-id="' + esc(s.id) + '">Edit</button>' : ''];
+        })) : empty('No courses or events yet.'), can('sessionSave') ? '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="course-edit">Add</button>' : badge('gray', 'View only'));
       } });
     }
 
@@ -892,6 +1067,13 @@
           '<div class="grid sm:grid-cols-3 gap-3">' + field('Request expires after (h)', input('request_expiry_hours', g.request_expiry_hours, 'type="number"')) + field('Overdue reminder every (h)', input('reminder_every_hours', g.reminder_every_hours, 'type="number"')) +
           field('Dashboard refresh (ms, 5000–10000)', input('dashboard_poll_ms', g.dashboard_poll_ms, 'type="number"')) + '</div>' +
           field('Monitor refresh (ms, 1000–5000)', input('monitor_poll_ms', g.monitor_poll_ms, 'type="number"')) +
+          '<div class="grid sm:grid-cols-4 gap-3">' + field('Longest reservation (h)', input('max_booking_hours', g.max_booking_hours, 'type="number"')) +
+          field('Book up to (days ahead)', input('booking_advance_days', g.booking_advance_days, 'type="number"')) +
+          field('No-show after (min)', input('no_show_minutes', g.no_show_minutes, 'type="number"')) +
+          field('Open reservations / student', input('max_open_bookings', g.max_open_bookings, 'type="number"')) + '</div>' +
+          '<div class="grid sm:grid-cols-2 gap-3">' + field('Archive rows older than (months)', input('archive_after_months', g.archive_after_months, 'type="number"')) +
+          field('Daily backups to keep', input('backup_keep_days', g.backup_keep_days, 'type="number"')) + '</div>' +
+          '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="missing_list_email"' + (g.missing_list_email ? ' checked' : '') + '> Email faculty the list of missing students after each course session</label>' +
           field('Extra digest recipients (emails)', '<textarea class="lp-input" name="report_recipients" rows="2">' + esc(g.report_recipients.join('\n')) + '</textarea>') +
           field('Test accounts allowed outside the institutional domains (leave empty in production)', '<textarea class="lp-input" name="extra_allowed_emails" rows="2">' + esc(g.extra_allowed_emails.join('\n')) + '</textarea>') +
           '<button class="lp-btn lp-btn-primary">Save system settings</button></form>';
@@ -905,7 +1087,7 @@
         })) + '<p class="text-xs text-slate-500 mt-2">Greyed boxes are built-in defaults. Super Admin always has every permission. Administrative actions cannot be delegated.</p>' +
           '<button class="lp-btn lp-btn-primary mt-3">Save permissions</button></form>';
 
-        var jobs = '<div class="flex flex-wrap gap-2">' + [['reconcile', 'Reconcile occupancy'], ['autoClose', 'Run auto-close'], ['overdue', 'Run overdue check'], ['digest', 'Send daily digests'], ['backup', 'Back up spreadsheet']].map(function (j) {
+        var jobs = '<div class="flex flex-wrap gap-2">' + [['reconcile', 'Reconcile occupancy'], ['autoClose', 'Run auto-close'], ['overdue', 'Run overdue check'], ['digest', 'Send daily digests'], ['bookings', 'Release no-show bookings'], ['rollup', 'Summarise usage now'], ['archive', 'Archive old rows'], ['encrypt', 'Encrypt old phone numbers'], ['backup', 'Back up spreadsheet']].map(function (j) {
           return '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="run-job" data-job="' + j[0] + '">' + j[1] + '</button>';
         }).join('') + '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="install-triggers">Install background triggers</button></div>';
 
@@ -917,13 +1099,29 @@
 
     function viewPeople() {
       return section('people', { load: function () { return call('users'); }, html: function (list) {
-        var roles = [['STUDENT', 'Student'], ['FACULTY', 'Faculty'], ['STAFF', 'Lab staff'], ['SUPER_ADMIN', 'Super Admin']];
+        var roles = ROLE_OPTIONS;
         return card('People', '<form id="user-add" class="flex flex-wrap gap-2 items-end mb-4"><div class="flex-1 min-w-[14rem]">' + field('Add or update by email', input('email', '', 'type="email" required placeholder="name@karunya.edu"')) + '</div>' +
           '<div>' + field('Role', select('role', roles, 'FACULTY')) + '</div><button class="lp-btn lp-btn-primary">Save</button></form>' +
           table(['Name', 'Email', 'ID', 'Mobile', 'Role', 'Active'], list.map(function (u) {
             return [esc(u.name || '—'), esc(u.email), esc(u.reg_no), esc(u.mobile), select('role', roles, u.role, 'data-user-role="' + esc(u.email) + '"'),
               '<input type="checkbox" data-user-active="' + esc(u.email) + '"' + (u.active ? ' checked' : '') + '>'];
           })) + '<p class="text-xs text-slate-500 mt-2">Every role change is written to the audit log.</p>');
+      } });
+    }
+
+    /** Coordinator: add, remove (deactivate) and re-activate student accounts. */
+    function viewStudents() {
+      return section('students', { load: function () { return call('students'); }, html: function (list) {
+        return card('Students', '<form id="student-add" class="grid sm:grid-cols-4 gap-2 items-end mb-4">' +
+          field('Email', input('email', '', 'type="email" required placeholder="urk24cs1249@karunya.edu.in"')) +
+          field('Name (optional)', input('name', '')) + field('Register no. (optional)', input('reg_no', '', 'placeholder="URK24CS1249"')) +
+          '<button class="lp-btn lp-btn-primary">Add student</button></form>' +
+          (list.length ? table(['Name', 'Register no.', 'Email', 'Profile', 'Status', ''], list.map(function (u) {
+            return [esc(u.name || '—'), esc(u.reg_no || '—'), esc(u.email), u.name ? badge('green', 'Complete') : badge('amber', 'Not signed in yet'),
+              u.active ? badge('green', 'Active') : badge('gray', 'Removed'),
+              '<button class="lp-btn lp-btn-sm ' + (u.active ? 'lp-btn-danger' : 'lp-btn-ghost') + '" data-act="student-toggle" data-email="' + esc(u.email) + '" data-active="' + (u.active ? '1' : '') + '">' + (u.active ? 'Remove' : 'Re-activate') + '</button>'];
+          })) : empty('No students yet.')) +
+          '<p class="text-xs text-slate-500 mt-2">Removing a student blocks their sign-in but keeps their history for reports. Every change is audit-logged.</p>');
       } });
     }
 
@@ -955,13 +1153,50 @@
           '<p class="text-xs text-slate-500 mt-3">The code changes every few seconds and works once, so a photo of it will not work later.</p>');
       },
       'resume-checkin': function (d) { startCheckin({ ok: true, labId: d.lab, labName: d.name, expiresInSec: Number(d.exp) }); },
-      'checkout': function (d, el) {
+      'checkout': function () {
+        var reqId = rid();
+        openModal('Check out', field('What did you work on today? (optional, saved to your project log)', '<textarea class="lp-input" name="note" rows="3" placeholder="e.g. Calibrated the soil sensors and logged 2 hours of data"></textarea>'), function (v) {
+          return call('checkOut', { requestId: reqId, note: v.note }).then(function (r) {
+            toast('Checked out after ' + dur(r.visit.duration_ms) + '.');
+            reloadVisible();
+            refreshOcc();
+          });
+        }, 'Check out');
+      },
+      'booking-new': function () {
+        var labId = studentLab();
+        Promise.all([call('assetsPublic', { labId: labId }), call('myProjects')]).then(function (res) {
+          var items = res[0].filter(function (a) { return a.status !== 'UNAVAILABLE'; });
+          var projects = res[1].filter(function (p) { return p.status === 'ACTIVE'; });
+          S.bookingAsset = items.length ? items[0].asset_id : '';
+          openModal('Reserve a slot',
+            field('Item', select('assetId', items.map(function (a) { return [a.asset_id, a.type + ' — ' + a.name]; }), S.bookingAsset, 'data-schedule')) +
+            '<div class="grid grid-cols-3 gap-3">' + field('Date', input('date', todayKey(), 'type="date" required data-schedule')) +
+            field('From', input('from', '', 'type="time" required')) + field('To', input('to', '', 'type="time" required')) + '</div>' +
+            '<div id="slot-info" class="text-xs text-slate-600"></div>' +
+            field('What will you use it for?', input('purpose', '', 'required placeholder="e.g. Print the sensor enclosure"')) +
+            field('Project (optional)', select('projectId', [['', '—']].concat(projects.map(function (p) { return [p.project_id, p.title]; })), '')) +
+            '<p class="text-xs text-slate-500">Up to ' + (S.init.maxBookingHours || 4) + ' hours, inside opening hours. If someone already has the slot you join the queue, and we email you if it frees up.</p>',
+            function (v) {
+              return call('bookAsset', { assetId: v.assetId, start: fromLocalInput(v.date + 'T' + v.from), end: fromLocalInput(v.date + 'T' + v.to), purpose: v.purpose, projectId: v.projectId }).then(function (b) {
+                toast(b.status === 'BOOKED' ? 'Reserved: ' + b.asset_name + ', ' + slotText(b) : 'That slot is taken. You are number ' + b.position + ' in the queue.', b.status === 'BOOKED' ? '' : 'warn');
+                reloadVisible();
+              });
+            }, 'Reserve');
+          showSchedule();
+        }, function (e) { toast(e.message, 'error'); });
+      },
+      'booking-cancel': function (d) {
+        call('cancelBooking', { bookingId: d.id }).then(function () { toast('Reservation cancelled.'); reloadVisible(); }, function (e) { toast(e.message, 'error'); });
+      },
+      'booking-start': function (d, el) {
         el.disabled = true;
-        call('checkOut', { requestId: rid() }).then(function (r) {
-          toast('Checked out after ' + dur(r.visit.duration_ms) + '.');
-          reloadVisible();
-          refreshOcc();
-        }, function (e) { toast(e.message, 'error'); el.disabled = false; });
+        call('startBooking', { bookingId: d.id }).then(function () { toast('Session started.'); reloadVisible(); }, function (e) { el.disabled = false; toast(e.message, 'error'); });
+      },
+      'booking-finish': function (d) {
+        openModal('Finish session: ' + d.name, field('Condition', select('condition', ['GOOD', 'FAIR', 'DAMAGED'], 'GOOD')) + field('Notes', input('note', '')), function (v) {
+          return call('finishBooking', { bookingId: d.id, condition: v.condition, note: v.note }).then(function () { toast('Session finished.'); reloadVisible(); });
+        }, 'Finish');
       },
       'request-asset': function () {
         var labId = studentLab();
@@ -1007,6 +1242,16 @@
         if (r.manual) r.sessionId = '';
         renderCheckin();
       },
+      'ci-system': function (d) {
+        var r = S.checkin.reason;
+        r.systemId = r.systemId === d.id ? '' : d.id;
+        renderCheckin();
+      },
+      'ci-project': function (d) {
+        var r = S.checkin.reason;
+        if (d.id === 'NEW') { r.newProject = true; r.projectId = ''; } else { r.newProject = false; r.projectId = d.id; }
+        renderCheckin();
+      },
       'ci-equip': function (d) {
         var r = S.checkin.reason;
         var i = r.equip.indexOf(d.type);
@@ -1033,6 +1278,15 @@
             loadSection('roster');
           });
         }, 'Save mark');
+      },
+      'missing-csv': function () {
+        var d = S.sections.roster && S.sections.roster.data;
+        if (!d) return;
+        var q = function (v) { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+        var lines = ['reg_no,name,email,session_code,date,status,reason'].concat(d.missing.map(function (x) {
+          return [x.reg_no, x.name, x.email, d.session.code, d.date, x.mark === 'ABSENT' ? 'ABSENT (marked)' : 'MISSING', x.mark_reason].map(q).join(',');
+        }));
+        download('missing_' + (d.session.code || d.session.id) + '_' + d.date + '.csv', lines.join('\r\n') + '\r\n');
       },
       'session-csv': function () {
         var date = S.roster.date || todayKey();
@@ -1185,6 +1439,42 @@
         S.lab = '';
         paintSection('settings');
       },
+      'project-edit': function (d) {
+        var p = d.id ? (S.myProjects || []).filter(function (x) { return x.project_id === d.id; })[0] : null;
+        openModal(p ? 'Edit project' : 'New project', projectForm(p), function (v) {
+          v.lab_id = studentLab() || S.lab;
+          return call('projectSave', v).then(function () { toast('Project saved.'); reloadVisible(); });
+        });
+      },
+      'project-complete': function (d) {
+        openModal('Submit the project outcome', '<p class="text-sm text-slate-600">What came out of this project? Results, what was built, what you learned.</p>' +
+          field('Outcome', '<textarea class="lp-input" name="outcome" rows="4" required></textarea>') +
+          field('Link to code, report or video (optional)', input('outcome_link', '', 'placeholder="https://github.com/…"')) +
+          field('Status', select('status', [['COMPLETED', 'Completed'], ['DROPPED', 'Stopped / dropped']], 'COMPLETED')), function (v) {
+          v.project_id = d.id;
+          return call('projectComplete', v).then(function () { toast('Outcome saved.'); reloadVisible(); });
+        }, 'Save outcome');
+      },
+      'project-open': function (d) {
+        call('projectDetail', { projectId: d.id }).then(function (r) {
+          var p = r.project;
+          openModal(p.title, '<div class="text-sm text-slate-600">' + esc(p.owner_name || p.owner_email) + ' · ' + esc(p.start_date + ' → ' + p.end_date) + ' · ' + p.hours + ' h · ' + projectStatus(p) + '</div>' +
+            (p.description ? '<p class="text-sm">' + esc(p.description) + '</p>' : '') +
+            (p.outcome ? '<p class="text-sm"><b>Outcome:</b> ' + esc(p.outcome) + '</p>' : '') +
+            '<h4 class="font-semibold text-sm mt-2">Work log</h4>' + (r.log.length ? table(['Date', 'Who', 'System', 'Hours', 'Note'], r.log.map(function (x) {
+              return [esc(x.date), esc(x.name), esc(x.system), x.hours, esc(x.note || '')];
+            })) : empty('No lab time logged yet.')));
+        }, function (e) { toast(e.message, 'error'); });
+      },
+      'student-toggle': function (d) {
+        var removing = !!d.active;
+        if (!removing) {
+          return call('manageStudent', { email: d.email, active: true }).then(function () { toast('Re-activated.'); loadSection('students'); }, function (e) { toast(e.message, 'error'); });
+        }
+        openModal('Remove ' + d.email + '?', '<p class="text-sm text-slate-600">They will no longer be able to sign in. Their visits stay in reports.</p>' + field('Reason', input('reason', '', 'required')), function (v) {
+          return call('manageStudent', { email: d.email, active: false, reason: v.reason }).then(function () { toast('Removed.'); loadSection('students'); });
+        }, 'Remove');
+      },
       'run-job': function (d, el) {
         el.disabled = true;
         call('runJob', { job: d.job }).then(function (r) { el.disabled = false; toast('Done: ' + JSON.stringify(r).slice(0, 120)); }, function (e) { el.disabled = false; toast(e.message, 'error'); });
@@ -1212,8 +1502,25 @@
       }
     });
 
+    /** In the reserve form: show what is already booked for the chosen item and day. */
+    function showSchedule() {
+      var f = document.getElementById('modal-form');
+      var info = document.getElementById('slot-info');
+      if (!f || !info) return;
+      var asset = f.querySelector('[name=assetId]').value;
+      var date = f.querySelector('[name=date]').value;
+      if (!asset || !date) return;
+      info.textContent = 'Checking the schedule…';
+      call('assetSchedule', { assetId: asset, date: date }).then(function (list) {
+        info.innerHTML = list.length ? 'Already reserved that day: ' + list.map(function (b) {
+          return '<b>' + esc(fmtTime(b.start_at) + '–' + fmtTime(b.end_at)) + '</b>' + (b.mine ? ' (you)' : '') + (b.status === 'WAITLIST' ? ' (queue)' : '');
+        }).join(', ') : 'Free all day.';
+      }, function () { info.textContent = ''; });
+    }
+
     document.addEventListener('change', function (ev) {
       var t = ev.target;
+      if (t.hasAttribute('data-schedule')) return showSchedule();
       if (t.id === 'lab-select') {
         S.lab = t.value;
         S.roster.sessionId = null;
@@ -1252,6 +1559,23 @@
           (overrides[p[0]] = overrides[p[0]] || []).push(p[1]);
         });
         call('savePermissions', { overrides: overrides }).then(function () { toast('Permissions saved.'); }, function (e) { toast(e.message, 'error'); });
+      } else if (f.id === 'lookup-student') {
+        ev.preventDefault();
+        var qv = f.querySelector('[name=q]').value;
+        S.lookupQ = qv;
+        var out1 = document.getElementById('lookup-student-out');
+        out1.innerHTML = skeleton(120);
+        call('lookupStudent', { q: qv }).then(function (r) { out1.innerHTML = htmlStudentLookup(r); }, function (e) { out1.innerHTML = errorBox(e); });
+      } else if (f.id === 'lookup-asset') {
+        ev.preventDefault();
+        var av = f.querySelector('[name=assetId]').value;
+        S.lookupAsset = av;
+        var out2 = document.getElementById('lookup-asset-out');
+        out2.innerHTML = skeleton(120);
+        call('lookupAsset', { assetId: av }).then(function (r) { out2.innerHTML = htmlAssetLookup(r); }, function (e) { out2.innerHTML = errorBox(e); });
+      } else if (f.id === 'student-add') {
+        ev.preventDefault();
+        call('manageStudent', formData(f)).then(function () { toast('Student added.'); loadSection('students'); }, function (e) { toast(e.message, 'error'); });
       } else if (f.id === 'user-add') {
         ev.preventDefault();
         call('saveUser', formData(f)).then(function () { toast('Saved.'); loadSection('people'); }, function (e) { toast(e.message, 'error'); });

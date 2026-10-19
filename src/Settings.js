@@ -36,6 +36,13 @@ var Settings = {
     max_loan_hours: 72,
     max_open_requests: 3,
     request_expiry_hours: 4,
+    max_booking_hours: 4, // longest single reserved slot
+    booking_advance_days: 14, // how far ahead a slot can be reserved
+    no_show_minutes: 15, // a confirmed slot not started by then goes to the next in the queue
+    max_open_bookings: 3,
+    missing_list_email: true, // email faculty the missing students after each course session
+    archive_after_months: 3, // closed rows older than this move to the yearly archive spreadsheet
+    backup_keep_days: 14, // daily backups kept; older ones keep one copy per month
     reminder_every_hours: 24,
     report_recipients: [], // extra digest recipients besides each lab's in-charge
     reports_folder_id: '',
@@ -208,13 +215,20 @@ var Settings = {
       max_loan_hours: [1, 720],
       max_open_requests: [1, 20],
       request_expiry_hours: [1, 72],
-      reminder_every_hours: [1, 168]
+      reminder_every_hours: [1, 168],
+      max_booking_hours: [1, 12],
+      booking_advance_days: [1, 60],
+      no_show_minutes: [5, 120],
+      max_open_bookings: [1, 20],
+      archive_after_months: [1, 24],
+      backup_keep_days: [3, 90]
     };
     Object.keys(ints).forEach(function (k) {
       var n = Math.round(U.num(next[k], NaN));
       if (!(n >= ints[k][0] && n <= ints[k][1])) fail_('INVALID', k + ' must be between ' + ints[k][0] + ' and ' + ints[k][1] + '.');
       next[k] = n;
     });
+    next.missing_list_email = next.missing_list_email === true || next.missing_list_email === 'true' || next.missing_list_email === 'on';
     if (next.default_loan_hours > next.max_loan_hours) fail_('INVALID', 'Default loan hours cannot exceed the maximum.');
     ['reports_folder_id', 'template_doc_id', 'backup_folder_id'].forEach(function (k) {
       next[k] = U.str(next[k]);

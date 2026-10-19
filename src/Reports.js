@@ -575,7 +575,7 @@ var Reports = {
   sessionLogPdf: function (ctx, p) {
     var r = Monitoring.roster(ctx, p);
     var rows = [];
-    [['present', 'Present'], ['pending', 'Pending review'], ['absent', 'Absent (marked)'], ['notArrived', 'Not arrived']].forEach(function (g) {
+    [['present', 'Present'], ['pending', 'Pending review'], ['absent', 'Absent (marked)'], ['notArrived', 'Missing / not arrived']].forEach(function (g) {
       r.roster[g[0]].forEach(function (x) {
         rows.push([x.reg_no, x.name, g[1], x.check_in_at ? U.fmt(new Date(x.check_in_at)) : '', x.check_out_at ? U.fmt(new Date(x.check_out_at)) : '', x.confidence, x.mark_reason]);
       });
