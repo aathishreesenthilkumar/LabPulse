@@ -45,6 +45,7 @@ src/                  Apps Script project (pushed with clasp; .js files become .
   Index.html, Client.html, Styles.html   dashboards for every role + phone check-in
   Monitor.html        full-screen lab monitor (QR, countdown, occupancy, online/offline)
 docs/
+  LabPulse_Progress_Summary.md   easy-read summary: what we built, how it works, roles, glossary, what's left
   LabPulse_SRS_v1.4.pdf   requirements, traced to the client proposal and the supervisor's briefing
   build_srs.py            regenerates the PDF (pip install reportlab; python docs/build_srs.py)
 dev/
