@@ -17,7 +17,8 @@
       sections: {},
       active: [],
       roster: { sessionId: null, date: null },
-      report: { kind: 'daily' }
+      report: { kind: 'daily' },
+      page: BOOT.view === 'monitor' ? 'app' : BOOT.view || 'landing'
     };
 
     /* ================= helpers ================= */
@@ -67,7 +68,8 @@
       var root = document.getElementById('toast-root');
       var el = document.createElement('div');
       var cls = kind === 'error' ? 'bg-red-700' : kind === 'warn' ? 'bg-amber-600' : 'bg-slate-900';
-      el.className = cls + ' text-white text-sm px-4 py-2.5 rounded-lg shadow-lg max-w-md pointer-events-auto';
+      el.className = cls + ' text-white text-sm font-medium px-4 py-3 rounded-xl shadow-xl max-w-md pointer-events-auto';
+      el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
       el.textContent = msg;
       root.appendChild(el);
       setTimeout(function () { el.remove(); }, kind === 'error' ? 6000 : 3500);
@@ -94,21 +96,112 @@
     }
     function entryLabel(t) { return { COURSE: 'Lab course', EVENT: 'Event / workshop', RESEARCH: 'Individual research' }[t] || t; }
 
+    /* ---------- icons (inline SVG, stroke style) ---------- */
+    var ICON_PATHS = {
+      home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
+      activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+      users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+      userPlus: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>',
+      calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+      box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+      cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
+      check: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+      book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5V21h16"/>',
+      folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+      search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+      chart: '<path d="M3 3v18h18"/><path d="M8 16v-5M13 16V8M18 16v-8"/>',
+      sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+      shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+      clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+      qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM17 17h4v4h-4z"/>',
+      menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+      alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
+      inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+      map: '<path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/><path d="M8 2v16M16 6v16"/>',
+      monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+      lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+      download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+      history: '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>'
+    };
+    function icon(name, cls) {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+        (cls ? ' class="' + cls + '"' : '') + '>' + (ICON_PATHS[name] || '') + '</svg>';
+    }
+
     function errorBox(e) {
       var denied = e && (e.code === 'FORBIDDEN' || e.code === 'NOT_REGISTERED' || e.code === 'INACTIVE');
-      return '<div class="rounded-lg p-3 text-sm ' + (denied ? 'bg-slate-50 text-slate-600' : 'bg-red-50 text-red-800') + '">' +
+      return '<div class="lp-card"><div class="lp-card-body flex items-start gap-3 text-sm ' + (denied ? 'text-slate-600' : 'text-red-800') + '">' +
+        '<span class="mt-0.5 ' + (denied ? 'text-slate-400' : 'text-red-500') + '">' + icon(denied ? 'lock' : 'alert', 'w-5 h-5') + '</span><div>' +
         (denied ? '<b>Not available for your role.</b> ' : '<b>Could not load.</b> ') + esc(e && e.message) +
-        (denied ? '' : ' <button class="underline ml-1" data-act="reload-sections">Retry</button>') + '</div>';
+        (denied ? '' : ' <button class="underline ml-1 font-semibold" data-act="reload-sections">Retry</button>') + '</div></div></div>';
     }
-    function empty(text) { return '<p class="text-sm text-slate-500 py-3">' + esc(text) + '</p>'; }
-    function skeleton(h) { return '<div class="lp-skeleton" style="height:' + (h || 72) + 'px"></div>'; }
-    function card(title, body, extra) {
-      return '<section class="lp-card p-4">' + (title ? '<div class="flex items-center justify-between gap-2 mb-3"><h2 class="font-semibold text-slate-800">' + title + '</h2>' + (extra || '') + '</div>' : '') + body + '</section>';
+    function empty(text, ic) { return '<div class="lp-empty">' + icon(ic || 'inbox') + '<span>' + esc(text) + '</span></div>'; }
+    function skeleton(h) { return '<div class="lp-skeleton" style="height:' + (h || 88) + 'px"></div>'; }
+    /** A titled panel. `extra` sits at the right of the header (buttons, badges). */
+    function card(title, body, extra, opts) {
+      opts = opts || {};
+      return '<section class="lp-card">' + (title ? '<div class="lp-card-head"><h2 class="lp-card-title">' + (opts.icon ? '<span class="text-slate-400">' + icon(opts.icon, 'w-4 h-4') + '</span>' : '') + title + '</h2>' +
+        (extra ? '<div class="flex items-center gap-2 flex-wrap justify-end">' + extra + '</div>' : '') + '</div>' : '') +
+        '<div class="lp-card-body">' + body + '</div></section>';
     }
     function table(cols, rows) {
       return '<div class="lp-scroll"><table class="lp-table"><thead><tr>' + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') +
         '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
     }
+    /** KPI tile: label, a big value (HTML), optional icon/tone/sub-line; `tab` makes it a link to that page. */
+    function statTile(label, value, o) {
+      o = o || {};
+      return '<div class="lp-stat"' + (o.tab ? ' data-act="tab" data-tab="' + o.tab + '" role="button"' : '') + '>' +
+
+        '<div class="min-w-0"><div class="lp-stat-label">' + esc(label) + '</div><div class="lp-stat-value">' + value + '</div>' +
+        (o.sub ? '<div class="lp-stat-sub">' + o.sub + '</div>' : '') + '</div></div>';
+    }
+    function initials(name) {
+      return String(name || '?').split(/[\s@.]+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0].toUpperCase(); }).join('');
+    }
+
+    /**
+     * Single-series column chart of people present per hour (one hue, so no legend; the card
+     * title names it). Values are labelled on the busiest hours only; every column shows its
+     * value on hover; the same numbers are in the table beside it.
+     */
+    function hourChart(hours) {
+      if (!hours || !hours.length) return empty('No attendance recorded for this day.', 'chart');
+      // Drawn at roughly the width it will occupy, so axis text stays ~11px on any screen.
+      var vw = window.innerWidth || 1024;
+      var W = Math.round(Math.max(320, Math.min(1180, vw - (vw >= 1024 ? 330 : 64)))), H = 230, L = 34, R = 8, T = 18, B = 26;
+      var iw = W - L - R, ih = H - T - B;
+      var max = Math.max.apply(null, hours.map(function (h) { return h.people; }));
+      var step = max <= 5 ? 1 : Math.ceil(max / 4 / Math.pow(10, Math.floor(Math.log10(max / 4)))) * Math.pow(10, Math.floor(Math.log10(max / 4)));
+      var top = Math.max(1, Math.ceil(max / step) * step);
+      var band = iw / hours.length;
+      var bw = Math.max(4, Math.min(24, band * 0.62));
+      var y = function (v) { return T + ih - (v / top) * ih; };
+      var out = '<svg class="lp-chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="People present per hour">';
+      for (var t = 0; t <= top; t += step) {
+        out += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(t) + '" y2="' + y(t) + '"/>' +
+          '<text class="axis" x="' + (L - 6) + '" y="' + (y(t) + 4) + '" text-anchor="end">' + t + '</text>';
+      }
+      hours.forEach(function (h, i) {
+        var cx = L + band * i + band / 2;
+        var x = cx - bw / 2;
+        var bh = (h.people / top) * ih;
+        var tip = String(h.hour).padStart(2, '0') + ':00–' + String(h.hour + 1).padStart(2, '0') + ':00 · ' + h.people + ' present · up to ' + h.peak + ' at once';
+        out += '<rect class="hit" x="' + (L + band * i) + '" y="' + T + '" width="' + band + '" height="' + ih + '" fill="transparent" data-tip="' + esc(tip) + '"/>';
+        if (bh > 0) {
+          var r = Math.min(4, bw / 2, bh);
+          var yy = T + ih - bh;
+          out += '<path class="bar" pointer-events="none" d="M' + x + ',' + (T + ih) + 'V' + (yy + r) + 'Q' + x + ',' + yy + ' ' + (x + r) + ',' + yy + 'H' + (x + bw - r) +
+            'Q' + (x + bw) + ',' + yy + ' ' + (x + bw) + ',' + (yy + r) + 'V' + (T + ih) + 'Z"/>';
+          if (h.people === max) out += '<text class="val" x="' + cx + '" y="' + (yy - 5) + '" text-anchor="middle">' + h.people + '</text>';
+        }
+        if (hours.length <= 14 || h.hour % 2 === 0) out += '<text class="axis" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + String(h.hour).padStart(2, '0') + '</text>';
+      });
+      return out + '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + (T + ih) + '" y2="' + (T + ih) + '" stroke="#cbd5e1"/></svg>';
+    }
+
     function field(label, inner) { return '<label class="block"><span class="lp-label">' + esc(label) + '</span>' + inner + '</label>'; }
     function input(name, value, attrs) { return '<input class="lp-input" name="' + name + '" value="' + esc(value === undefined || value === null ? '' : value) + '" ' + (attrs || '') + '>'; }
     function select(name, options, value, attrs) {
@@ -172,13 +265,13 @@
     function openModal(title, body, onSubmit, submitLabel) {
       var root = document.getElementById('modal-root');
       root.innerHTML =
-        '<div class="fixed inset-0 bg-slate-900/50 z-40 flex items-end sm:items-center justify-center p-0 sm:p-4" data-act="modal-backdrop">' +
-        '<form class="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl p-5 max-h-[92vh] overflow-y-auto" id="modal-form">' +
-        '<div class="flex items-start justify-between gap-3 mb-4"><h3 class="font-semibold text-lg">' + esc(title) + '</h3>' +
-        '<button type="button" class="text-slate-400 text-2xl leading-none" data-act="modal-close" aria-label="Close">&times;</button></div>' +
-        '<div class="space-y-3">' + body + '</div>' +
-        '<div id="modal-error" class="hidden mt-3 rounded-lg bg-red-50 text-red-800 text-sm p-3"></div>' +
-        (onSubmit ? '<div class="flex justify-end gap-2 mt-5"><button type="button" class="lp-btn lp-btn-ghost" data-act="modal-close">Cancel</button>' +
+        '<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-[2px] z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" data-act="modal-backdrop">' +
+        '<form class="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[92vh] overflow-y-auto" id="modal-form" role="dialog" aria-modal="true">' +
+        '<div class="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-slate-100"><h3 class="font-semibold text-lg tracking-tight">' + esc(title) + '</h3>' +
+        '<button type="button" class="text-slate-400 hover:text-slate-700 text-2xl leading-none" data-act="modal-close" aria-label="Close">&times;</button></div>' +
+        '<div class="space-y-3 px-5 py-4">' + body + '</div>' +
+        '<div id="modal-error" class="hidden mx-5 mb-3 rounded-lg bg-red-50 text-red-800 text-sm p-3"></div>' +
+        (onSubmit ? '<div class="flex justify-end gap-2 px-5 py-4 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl"><button type="button" class="lp-btn lp-btn-ghost" data-act="modal-close">Cancel</button>' +
           '<button class="lp-btn lp-btn-primary" id="modal-submit">' + esc(submitLabel || 'Save') + '</button></div>' : '') +
         '</form></div>';
       var form = document.getElementById('modal-form');
@@ -213,101 +306,274 @@
     var ROLE_OPTIONS = ['STUDENT', 'FACULTY', 'STAFF', 'COORDINATOR', 'HOD', 'SUPER_ADMIN'].map(function (r) { return [r, ROLE_NAMES[r]]; });
 
     var TABS = [
-      { id: 'home', label: 'Home', show: function () { return role() === 'STUDENT'; }, view: viewHome },
-      { id: 'projects', label: 'My projects', show: function () { return role() === 'STUDENT'; }, view: viewProjects },
-      { id: 'history', label: 'My history', show: function () { return role() === 'STUDENT'; }, view: viewHistory },
-      { id: 'live', label: 'Live', show: function () { return can('staffSummary'); }, view: viewLive },
-      { id: 'sessions', label: 'My sessions', show: function () { return can('facultySessions'); }, view: viewFaculty },
-      { id: 'reviews', label: 'Reviews', show: function () { return can('reviewQueue'); }, view: viewReviews },
-      { id: 'inventory', label: 'Inventory', show: function () { return can('inventory'); }, view: viewInventory },
-      { id: 'courses', label: 'Courses & events', show: function () { return can('sessions'); }, view: viewCourses },
-      { id: 'lookup', label: 'Lookup', show: function () { return can('lookupStudent') || can('lookupAsset'); }, view: viewLookup },
-      { id: 'labprojects', label: 'Projects', show: function () { return role() !== 'STUDENT' && can('projects'); }, view: viewProjects },
-      { id: 'reports', label: 'Reports', show: function () { return can('reportDaily') || can('exportRange'); }, view: viewReports },
-      { id: 'settings', label: 'Settings', show: function () { return can('settingsGet'); }, view: viewSettings },
-      { id: 'students', label: 'Students', show: function () { return can('students') && !can('users'); }, view: viewStudents },
-      { id: 'people', label: 'People', show: function () { return can('users'); }, view: viewPeople },
-      { id: 'audit', label: 'Audit', show: function () { return can('audit'); }, view: viewAudit }
+      { id: 'home', label: 'Home', icon: 'home', group: 'Workspace', sub: 'Your status, equipment and time in the lab', show: function () { return role() === 'STUDENT'; }, view: viewHome },
+      { id: 'equipment', label: 'Equipment', icon: 'cpu', group: 'Workspace', sub: 'What the lab has and what is free right now', show: function () { return role() === 'STUDENT'; }, view: viewEquipment },
+      { id: 'projects', label: 'My projects', icon: 'folder', group: 'Workspace', sub: 'Timeline, work log and outcome of your projects', show: function () { return role() === 'STUDENT'; }, view: viewProjects },
+      { id: 'history', label: 'My history', icon: 'clock', group: 'Workspace', sub: 'Your visits and borrowing history', show: function () { return role() === 'STUDENT'; }, view: viewHistory },
+      { id: 'live', label: 'Live', icon: 'activity', group: 'Monitor', sub: 'Who is in the lab right now and what is happening', show: function () { return can('staffSummary'); }, view: viewLive },
+      { id: 'sessions', label: 'Sessions', icon: 'calendar', group: 'Monitor', sub: 'Live roster for today’s courses and events', show: function () { return can('facultySessions'); }, view: viewFaculty },
+      { id: 'reviews', label: 'Reviews', icon: 'check', group: 'Monitor', sub: 'Check-ins waiting for a one-tap confirmation', show: function () { return can('reviewQueue'); }, view: viewReviews },
+      { id: 'inventory', label: 'Inventory', icon: 'box', group: 'Lab', sub: 'The hardware catalog and its status', show: function () { return can('inventory'); }, view: viewInventory },
+      { id: 'courses', label: 'Courses & events', icon: 'book', group: 'Lab', sub: 'Timetabled sessions and their enrolment', show: function () { return can('sessions'); }, view: viewCourses },
+      { id: 'lookup', label: 'Lookup', icon: 'search', group: 'Lab', sub: 'Usage by register number or by system', show: function () { return can('lookupStudent') || can('lookupAsset'); }, view: viewLookup },
+      { id: 'labprojects', label: 'Projects', icon: 'folder', group: 'Lab', sub: 'Every project in this lab, its hours and outcome', show: function () { return role() !== 'STUDENT' && can('projects'); }, view: viewProjects },
+      { id: 'reports', label: 'Reports', icon: 'chart', group: 'Insights', sub: 'Daily digest, monthly audit, date ranges and exports', show: function () { return can('reportDaily') || can('exportRange'); }, view: viewReports },
+      { id: 'settings', label: 'Settings', icon: 'sliders', group: 'Admin', sub: 'Lab location, geofence, hours and system settings', show: function () { return can('settingsGet'); }, view: viewSettings },
+      { id: 'students', label: 'Students', icon: 'userPlus', group: 'Admin', sub: 'Add, remove and re-activate student accounts', show: function () { return can('students') && !can('users'); }, view: viewStudents },
+      { id: 'people', label: 'People', icon: 'users', group: 'Admin', sub: 'Accounts, roles and permissions', show: function () { return can('users'); }, view: viewPeople },
+      { id: 'audit', label: 'Audit', icon: 'shield', group: 'Admin', sub: 'Append-only log of sensitive actions', show: function () { return can('audit'); }, view: viewAudit }
     ];
     function visibleTabs() { return TABS.filter(function (t) { return t.show(); }); }
 
-    function header() {
+    function sidebar() {
       var me = S.init.me;
       var labs = S.init.labs || [];
-      var roleName = ROLE_NAMES[me.role] || '';
-      return '<header class="bg-white border-b border-slate-200 sticky top-0 z-30">' +
-        '<div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">' +
-        '<div class="flex items-center gap-2 mr-auto"><div class="w-8 h-8 rounded-lg bg-teal-700 text-white grid place-items-center font-black">L</div>' +
-        '<div><div class="font-bold leading-tight">LabPulse</div><div class="text-xs text-slate-500 leading-tight">' + esc(me.name || me.email) + (roleName ? ' · ' + roleName : '') + '</div></div></div>' +
-        (labs.length > 1 ? '<select class="lp-input !w-auto !py-1.5 text-sm" id="lab-select">' + labs.map(function (l) {
-          return '<option value="' + esc(l.lab_id) + '"' + (l.lab_id === S.lab ? ' selected' : '') + '>' + esc(l.name) + '</option>';
-        }).join('') + '</select>' : '<span class="text-sm text-slate-600 font-medium">' + esc(curLab() ? curLab().name : '') + '</span>') +
-        '<div id="occ-pill">' + occPill() + '</div>' +
-        '</div>' +
-        '<nav class="max-w-7xl mx-auto px-2 flex overflow-x-auto" role="tablist">' + visibleTabs().map(function (t) {
-          return '<button class="lp-tab" role="tab" aria-selected="' + (t.id === S.tab) + '" data-act="tab" data-tab="' + t.id + '">' + esc(t.label) + '</button>';
-        }).join('') + '</nav></header>';
+      var group = null;
+      var nav = visibleTabs().map(function (t) {
+        var head = t.group !== group ? '<div class="lp-nav-group">' + esc(t.group) + '</div>' : '';
+        group = t.group;
+        return head + '<button class="lp-nav-item" role="tab" aria-selected="' + (t.id === S.tab) + '" data-act="tab" data-tab="' + t.id + '">' +
+          icon(t.icon) + '<span>' + esc(t.label) + '</span></button>';
+      }).join('');
+      return '<aside class="lp-side" aria-label="Main navigation">' +
+        '<div class="lp-side-brand"><div class="lp-logo">' + icon('pulse', 'w-5 h-5') + '</div><div><div class="font-bold text-white leading-tight tracking-tight">LabPulse</div>' +
+        '<div class="text-[11px] text-slate-400 leading-tight">Lab attendance &amp; assets</div></div></div>' +
+        '<div class="px-4 pb-1">' + (labs.length > 1
+          ? '<select id="lab-select" class="w-full rounded-lg bg-white/5 border border-white/10 text-slate-200 text-sm px-2.5 py-2">' + labs.map(function (l) {
+              return '<option value="' + esc(l.lab_id) + '"' + (l.lab_id === S.lab ? ' selected' : '') + '>' + esc(l.name) + '</option>';
+            }).join('') + '</select>'
+          : '<div class="rounded-lg bg-white/5 border border-white/10 text-slate-200 text-sm px-3 py-2 flex items-center gap-2">' + icon('map', 'w-4 h-4 text-teal-300') + '<span class="truncate">' + esc(curLab() ? curLab().name : '') + '</span></div>') + '</div>' +
+        '<nav class="lp-side-nav" role="tablist">' + nav + '</nav>' +
+        '<div class="lp-side-foot"><div class="lp-avatar">' + esc(initials(me.name || me.email)) + '</div><div class="min-w-0">' +
+        '<div class="text-sm font-semibold text-white truncate">' + esc(me.name || me.email) + '</div>' +
+        '<div class="text-xs text-slate-400 truncate">' + esc(ROLE_NAMES[me.role] || '') + (me.reg_no ? ' · ' + esc(me.reg_no) : '') + '</div></div></div></aside>';
+    }
+
+    function topbar(tab) {
+      var lab = curLab();
+      return '<header class="lp-top"><div class="max-w-[1280px] mx-auto px-4 lg:px-5 py-3 flex items-center gap-3">' +
+        '<button class="lp-btn lp-btn-ghost lp-btn-sm lg:hidden !px-2" data-act="nav-toggle" aria-label="Open menu">' + icon('menu') + '</button>' +
+        '<div class="min-w-0 mr-auto"><h1 class="text-lg sm:text-xl font-bold tracking-tight truncate">' + esc(tab.label) + '</h1>' +
+        '<p class="text-xs sm:text-sm text-slate-500 truncate">' + esc(tab.sub || '') + (lab ? ' · ' + esc(lab.name) : '') + '</p></div>' +
+        '<div id="occ-pill">' + occPill() + '</div></div></header>';
     }
 
     function occPill() {
       var n = S.occ;
-      return '<div class="flex items-center gap-2 rounded-full bg-teal-50 text-teal-800 px-3 py-1 text-sm font-semibold" title="Verified check-ins inside now; check-ins awaiting review are shown separately">' +
-        '<span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-60"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-teal-600"></span></span>' +
-        (n === null ? '…' : n) + ' inside' + (S.occPending ? '<span class="text-amber-700 font-medium">· ' + S.occPending + ' pending</span>' : '') + '</div>';
+      return '<div class="flex items-center gap-2 rounded-full bg-white border border-slate-200 shadow-sm px-3 py-1.5 text-sm font-semibold whitespace-nowrap" title="Verified check-ins inside now; check-ins awaiting review are shown separately">' +
+        '<span class="lp-live-dot"></span><span class="lp-num">' + (n === null || n === undefined ? '…' : n) + '</span> inside' +
+        (S.occPending ? '<span class="text-amber-700 font-medium">· ' + S.occPending + ' pending</span>' : '') + '</div>';
     }
 
     function render() {
       var app = document.getElementById('app');
-      if (BOOT.error && !S.init) return renderFatal(BOOT.error);
-      if (!S.init.me.registered) return renderRegister();
       if (S.checkin) return renderCheckin();
+      if (S.page === 'landing') return renderLanding();
+      if (S.page === 'login') return renderLogin();
+      if (S.page === 'signup') return renderSignup();
+      // Dashboard pages need a known, registered account; otherwise send people to log in / sign up.
+      if (!S.init) return renderLogin();
+      if (!S.init.me.registered) return renderSignup();
       var tabs = visibleTabs();
       if (!tabs.length) return renderFatal({ message: 'Your account has no LabPulse role yet. Ask the lab in-charge.' });
       if (!S.tab || !tabs.some(function (t) { return t.id === S.tab; })) S.tab = tabs[0].id;
       S.active = [];
       var tab = tabs.filter(function (t) { return t.id === S.tab; })[0];
-      app.innerHTML = header() + '<main class="max-w-7xl mx-auto p-4 space-y-4 pb-24">' + tab.view() + '</main>';
+      app.innerHTML = '<div class="lp-shell' + (S.navOpen ? ' nav-open' : '') + '" id="shell">' + sidebar() +
+        '<div class="lp-scrim" data-act="nav-close"></div>' +
+        '<div class="lp-main">' + topbar(tab) + '<main class="lp-content space-y-5">' + tab.view() + '</main></div></div>';
       loadAll();
     }
 
-    function renderFatal(e) {
-      document.getElementById('app').innerHTML =
-        '<div class="min-h-screen grid place-items-center p-6"><div class="lp-card p-6 max-w-md text-center">' +
-        '<div class="text-4xl mb-3">🔒</div><h1 class="text-lg font-bold mb-2">LabPulse</h1>' +
-        '<p class="text-slate-600">' + esc(e.message) + '</p>' +
-        '<a class="lp-btn lp-btn-primary mt-5" href="' + esc(BOOT.webAppUrl) + '">Reload</a></div></div>';
+    function brandScreen(inner) {
+      return '<div class="min-h-screen grid lg:grid-cols-[1fr_1.1fr]">' +
+        '<div class="hidden lg:flex flex-col justify-between p-10 text-white" style="background:radial-gradient(1200px 600px at 0% 0%,#134e4a,#0b1220 60%)">' +
+        '<div class="flex items-center gap-3"><div class="lp-logo">' + icon('pulse', 'w-5 h-5') + '</div><div class="font-bold text-lg tracking-tight">LabPulse</div></div>' +
+        '<div><h2 class="text-3xl font-bold leading-tight tracking-tight max-w-md">Verified lab attendance, live occupancy and equipment tracking.</h2>' +
+        '<p class="text-slate-300 mt-3 max-w-md">Scan the QR on the lab screen, confirm you are inside, and get to work. Built on Google Workspace for Karunya.</p></div>' +
+        '<div class="text-xs text-slate-400">Intel Unnati IoT Lab · Division of CSE</div></div>' +
+        '<div class="grid place-items-center p-4 sm:p-8">' + inner + '</div></div>';
     }
 
-    /* ================= registration (FR-02) ================= */
+    function renderFatal(e) {
+      document.getElementById('app').innerHTML = brandScreen(
+        '<div class="lp-card w-full max-w-md"><div class="lp-card-body text-center p-8"><div class="mx-auto w-12 h-12 rounded-2xl tone-slate grid place-items-center mb-4">' + icon('lock', 'w-6 h-6') + '</div>' +
+        '<h1 class="text-lg font-bold mb-2">LabPulse</h1><p class="text-slate-600">' + esc(e.message) + '</p>' +
+        '<a class="lp-btn lp-btn-primary mt-6" href="' + esc(BOOT.webAppUrl) + '">Reload</a></div></div>');
+    }
 
-    function renderRegister() {
-      var me = S.init.me;
-      document.getElementById('app').innerHTML =
-        '<div class="min-h-screen grid place-items-center p-4"><form id="reg-form" class="lp-card p-6 w-full max-w-md space-y-4">' +
-        '<div><h1 class="text-xl font-bold">Welcome to LabPulse</h1><p class="text-sm text-slate-600 mt-1">One-time profile for <b>' + esc(me.email) + '</b>.' +
-        (BOOT.claim && BOOT.claim.ok ? ' Your QR scan is held for a few minutes while you finish.' : '') + '</p></div>' +
-        field('Full name', input('name', me.name, 'required autocomplete="name"')) +
-        field('Roll number / employee ID', input('reg_no', me.reg_no, 'required placeholder="URK24CS1249" autocapitalize="characters"')) +
-        field('Mobile number', input('mobile', '', 'required inputmode="tel" placeholder="98765 43210" autocomplete="tel"')) +
-        '<div id="reg-error" class="hidden rounded-lg bg-red-50 text-red-800 text-sm p-3"></div>' +
-        '<button class="lp-btn lp-btn-primary w-full" id="reg-btn">Save and continue</button>' +
-        '<p class="text-xs text-slate-500">Your mobile number is visible only to lab staff and administrators. It never appears in exports.</p>' +
-        '</form></div>';
-      document.getElementById('reg-form').addEventListener('submit', function (ev) {
+    /* ================= public pages: landing, log in, sign up ================= */
+
+    // Pages that do not need a completed profile. Identity itself always comes from Google.
+    var PUBLIC_PAGES = { landing: true, login: true, signup: true };
+
+    function identity() {
+      if (S.init && S.init.me) return { known: true, registered: !!S.init.me.registered, me: S.init.me };
+      return { known: false, error: BOOT.error || null };
+    }
+
+    /** Navigate between pages without a reload; keeps the address bar in step where possible. */
+    function goPage(page) {
+      S.page = page;
+      try {
+        if (window.google && google.script && google.script.history) google.script.history.push(null, { view: page });
+        else if (window.history && history.pushState) history.pushState(null, '', '?view=' + page);
+      } catch (e) { /* history is a nicety; navigation already happened */ }
+      render();
+      window.scrollTo(0, 0);
+    }
+
+    function switchAccountUrl(back) {
+      return 'https://accounts.google.com/AccountChooser?continue=' + encodeURIComponent(BOOT.webAppUrl + '?view=' + (back || 'login'));
+    }
+
+    var GOOGLE_G = '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 7l7.3 5.7c4.3-4 7-9.9 7-17.2z"/><path fill="#FBBC05" d="M10.6 28.6A14.4 14.4 0 0 1 9.5 24c0-1.6.3-3.2.8-4.6l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.3-5.7c-2 1.4-4.7 2.3-8.6 2.3-6.2 0-11.5-4.1-13.4-9.9l-8 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
+
+    function landingCtas(slot) {
+      var id = identity();
+      if (id.known && id.registered) {
+        return slot === 'nav' ? '<button class="lx-btn lx-btn-dark" data-act="go" data-page="app">Open dashboard</button>'
+          : '<button class="lx-btn lx-btn-dark lx-btn-lg" data-act="go" data-page="app">Open your dashboard</button><a class="lx-btn lx-btn-line lx-btn-lg" href="#how">How it works</a>';
+      }
+      return slot === 'nav' ? '<button class="lx-btn lx-btn-text" data-act="go" data-page="login">Log in</button><button class="lx-btn lx-btn-dark" data-act="go" data-page="signup">Sign up</button>'
+        : '<button class="lx-btn lx-btn-dark lx-btn-lg" data-act="go" data-page="signup">Create your account</button><button class="lx-btn lx-btn-line lx-btn-lg" data-act="go" data-page="login">Log in</button>';
+    }
+
+    /** A decorative QR-like pattern for the hero (not scannable; the real one is on the lab screen). */
+    function heroQr() {
+      var n = 29, seed = 7, out = '';
+      var rnd = function () { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      var finder = function (x, y) { return '<path d="M' + x + ' ' + y + 'h7v7h-7z M' + (x + 1) + ' ' + (y + 1) + 'v5h5v-5z" fill="#121212" fill-rule="evenodd"/><rect x="' + (x + 2) + '" y="' + (y + 2) + '" width="3" height="3" fill="#121212"/>'; };
+      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) {
+        var inFinder = (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
+        if (!inFinder && rnd() < 0.47) out += '<rect x="' + x + '" y="' + y + '" width="1" height="1" fill="#121212"/>';
+      }
+      return out + finder(0, 0) + finder(n - 7, 0) + finder(0, n - 7);
+    }
+
+    function renderLanding() {
+      var tpl = document.getElementById('tpl-landing');
+      var app = document.getElementById('app');
+      app.innerHTML = '';
+      app.appendChild(tpl.content.cloneNode(true));
+      app.querySelector('[data-slot="nav-cta"]').innerHTML = landingCtas('nav');
+      app.querySelector('[data-slot="hero-cta"]').innerHTML = landingCtas('hero');
+      app.querySelector('[data-slot="final-cta"]').innerHTML = landingCtas('hero');
+      app.querySelector('[data-slot="qr"]').innerHTML = heroQr();
+      var nav = document.getElementById('lx-nav');
+      var onScroll = function () { if (nav) nav.classList.toggle('scrolled', window.scrollY > 8); };
+      window.removeEventListener('scroll', S._lxScroll || onScroll);
+      S._lxScroll = onScroll;
+      window.addEventListener('scroll', onScroll, { passive: true });
+      if (S.occ !== null && S.occ !== undefined) app.querySelector('[data-slot="count"]').textContent = S.occ;
+    }
+
+    function authShell(inner, side) {
+      return '<div class="lx"><div class="lx-auth">' +
+        '<div class="lx-auth-form"><div class="flex items-center justify-between"><button class="lx-mark" data-act="go" data-page="landing" aria-label="LabPulse home">' +
+        '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#121212"/><path d="M6 17h5l2.5-7 5 13 2.5-6H26" fill="none" stroke="#7ee2c3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>LabPulse</button>' +
+        '<button class="lx-btn lx-btn-text" data-act="go" data-page="landing">← Back to site</button></div>' +
+        '<div class="lx-auth-box">' + inner + '</div></div>' +
+        '<aside class="lx-auth-side"><div class="lx-eyebrow">Intel Unnati IoT Lab · Karunya</div>' + side + '</aside></div></div>';
+    }
+
+    function authSide(quote) {
+      return '<div><blockquote>' + quote + '</blockquote><ul>' +
+        '<li>QR code rotation <b>every 8 s</b></li><li>Geofence radius <b>20 m</b></li><li>Coordinates stored <b>none</b></li><li>Phone numbers <b>encrypted</b></li></ul></div>' +
+        '<div class="lx-note" style="color:#8fa197">Access is limited to @karunya.edu and @karunya.edu.in Google accounts.</div>';
+    }
+
+    /** Preview only: there is no Google sign-in on a laptop, so a test account is chosen instead. */
+    function devAccounts(next) {
+      var list = (BOOT.dev && BOOT.dev.accounts) || [];
+      if (!list.length) return '';
+      return '<div class="lx-alert info"><b>Preview mode.</b> The deployed app uses your Google account. Here, pick a test account:</div>' +
+        '<div style="display:grid;gap:8px">' + list.map(function (a) {
+          return '<a class="lx-account" href="/as?u=' + encodeURIComponent(a[0]) + '&next=' + encodeURIComponent('/app?view=' + next) + '"><span class="lx-avatar">' + esc(initials(a[1])) + '</span>' +
+            '<span style="min-width:0"><b style="display:block;font-size:14px">' + esc(a[1]) + '</b><span class="lx-note">' + esc(a[2]) + '</span></span></a>';
+        }).join('') + '</div>';
+    }
+
+    function accountCard(me, sub) {
+      return '<div class="lx-account"><span class="lx-avatar">' + esc(initials(me.name || me.email)) + '</span><span style="min-width:0;flex:1">' +
+        '<b style="display:block;font-size:15px;overflow:hidden;text-overflow:ellipsis">' + esc(me.name || me.email) + '</b>' +
+        '<span class="lx-note">' + esc(sub || me.email) + '</span></span>' + GOOGLE_G + '</div>';
+    }
+
+    function renderLogin() {
+      var id = identity();
+      var body;
+      if (id.known) {
+        var me = id.me;
+        body = '<p class="lx-eyebrow" style="margin-bottom:10px">Signed in with Google</p>' + accountCard(me, me.registered ? me.email + ' · ' + (ROLE_NAMES[me.role] || '') : me.email) +
+          '<button class="lx-submit" style="margin-top:16px" data-act="go" data-page="' + (me.registered ? 'app' : 'signup') + '">' + (me.registered ? 'Continue to dashboard' : 'Continue and finish sign-up') + '</button>' +
+          (me.registered ? '' : '<p class="lx-note" style="margin-top:12px">This Google account has no LabPulse profile yet. It takes 30 seconds.</p>') +
+          '<p class="lx-switch">Not you? <a class="lx-link" href="' + esc(switchAccountUrl('login')) + '" target="_top">Use a different Google account</a></p>' +
+          (BOOT.dev ? '<div style="margin-top:22px">' + devAccounts('login') + '</div>' : '');
+      } else {
+        var e = id.error;
+        body = (e && e.code === 'DOMAIN' ? '<div class="lx-alert err"><b>This Google account can’t use LabPulse.</b> Only @karunya.edu and @karunya.edu.in accounts are allowed. Switch to your Karunya account.</div>'
+          : e && e.message && e.code !== 'NO_IDENTITY' ? '<div class="lx-alert err">' + esc(e.message) + '</div>' : '') +
+          (BOOT.dev ? devAccounts('login')
+            : '<a class="lx-google" href="' + esc(switchAccountUrl('login')) + '" target="_top">' + GOOGLE_G + 'Continue with Google</a>' +
+              '<p class="lx-note" style="margin-top:14px">Use your Karunya Google account. LabPulse never sees your Google password.</p>');
+      }
+      document.getElementById('app').innerHTML = authShell(
+        '<h1>Welcome <em>back.</em></h1><p class="sub">Log in with your Karunya Google account to check in, reserve equipment and see your lab time.</p>' + body +
+        '<p class="lx-switch">New to LabPulse? <a class="lx-link" data-act="go" data-page="signup">Create an account</a></p>',
+        authSide('“The register now fills itself in, and nobody can sign in for a friend.”'));
+    }
+
+    function renderSignup() {
+      var id = identity();
+      var steps = function (n) { return '<div class="lx-steps-mini" aria-label="Step ' + n + ' of 2"><i class="on"></i><i' + (n > 1 ? ' class="on"' : '') + '></i></div>'; };
+      var head = '<h1>Create your <em>account.</em></h1>';
+      var stepNo = !id.known ? 1 : id.registered ? 0 : 2;
+      if (stepNo) head = steps(stepNo) + head;
+      var body;
+      if (!id.known) {
+        var e = id.error;
+        body = '<p class="sub">Step 1 of 2 · Choose your Karunya Google account. LabPulse uses it to know it is really you.</p>' +
+          (e && e.code === 'DOMAIN' ? '<div class="lx-alert err"><b>That account isn’t a Karunya account.</b> Sign up with @karunya.edu or @karunya.edu.in.</div>' : '') +
+          (BOOT.dev ? devAccounts('signup') : '<a class="lx-google" href="' + esc(switchAccountUrl('signup')) + '" target="_top">' + GOOGLE_G + 'Continue with Google</a>');
+      } else if (id.registered) {
+        body = '<p class="sub">You already have a LabPulse account.</p>' + accountCard(id.me, id.me.email + ' · ' + (ROLE_NAMES[id.me.role] || '')) +
+          '<button class="lx-submit" style="margin-top:16px" data-act="go" data-page="app">Go to dashboard</button>';
+      } else {
+        var me = id.me;
+        body = '<p class="sub">Step 2 of 2 · A one-time profile so faculty and lab staff know who you are.' +
+          (BOOT.claim && BOOT.claim.ok ? ' Your QR scan is held for a few minutes while you finish.' : '') + '</p>' +
+          '<form id="reg-form" novalidate>' +
+          '<label class="lx-field"><span>Karunya email</span><input value="' + esc(me.email) + '" readonly><small>From your Google account. <a class="lx-link" href="' + esc(switchAccountUrl('signup')) + '" target="_top">Use a different account</a></small></label>' +
+          '<label class="lx-field"><span>Full name</span><input name="name" value="' + esc(me.name || '') + '" required autocomplete="name" placeholder="As on your ID card"></label>' +
+          '<label class="lx-field"><span>Register number / employee ID</span><input name="reg_no" value="' + esc(me.reg_no || '') + '" required placeholder="URK24CS1249" autocapitalize="characters"><small>Students: your register number. Staff and faculty: your employee ID.</small></label>' +
+          '<label class="lx-field"><span>Mobile number</span><input name="mobile" required inputmode="tel" placeholder="98765 43210" autocomplete="tel"><small>Stored encrypted. Only lab staff and administrators can see it; it never appears in exports.</small></label>' +
+          '<div id="reg-error" class="lx-alert err" style="display:none"></div>' +
+          '<button class="lx-submit" id="reg-btn">Create account</button></form>';
+      }
+      document.getElementById('app').innerHTML = authShell(head + body +
+        '<p class="lx-switch">Already have an account? <a class="lx-link" data-act="go" data-page="login">Log in</a></p>',
+        authSide('“Students check in in ten seconds. The HOD sees the lab from home.”'));
+      var form = document.getElementById('reg-form');
+      if (!form) return;
+      form.addEventListener('submit', function (ev) {
         ev.preventDefault();
         var btn = document.getElementById('reg-btn');
         var err = document.getElementById('reg-error');
         btn.disabled = true;
-        err.classList.add('hidden');
+        btn.textContent = 'Creating your account…';
+        err.style.display = 'none';
         call('register', formData(ev.target)).then(function () {
           return call('bootstrap');
         }).then(function (init) {
           S.init = init;
+          S.page = 'app';
           afterInit();
         }, function (e) {
           err.textContent = e.message;
-          err.classList.remove('hidden');
+          err.style.display = 'block';
           btn.disabled = false;
+          btn.textContent = 'Create account';
         });
       });
     }
@@ -458,8 +724,7 @@
       if (r.type === 'RESEARCH') {
         var chips = (c.options.equipment || []).concat(['None']).map(function (t) {
           var on = r.equip.indexOf(t) !== -1;
-          return '<button type="button" class="rounded-full border px-3 py-1 text-sm ' + (on ? 'bg-teal-50 border-teal-600 text-teal-800 font-semibold' : 'bg-white border-slate-300') +
-            '" aria-pressed="' + on + '" data-act="ci-equip" data-type="' + esc(t) + '">' + (on ? '✓ ' : '') + esc(t) + '</button>';
+          return '<button type="button" class="lp-chip" aria-pressed="' + on + '" data-act="ci-equip" data-type="' + esc(t) + '">' + (on ? '✓ ' : '') + esc(t) + '</button>';
         }).join('');
         return '<div class="space-y-3 mt-3">' +
           field('Purpose of visit', '<textarea class="lp-input" rows="2" data-bind="purpose" placeholder="e.g. Training a CNN for my final-year project">' + esc(r.purpose) + '</textarea>') +
@@ -494,18 +759,19 @@
       var c = S.checkin;
       var app = document.getElementById('app');
       var shell = function (inner) {
-        return '<div class="min-h-screen max-w-md mx-auto p-4 flex flex-col gap-4">' +
-          '<div class="flex items-center gap-2 pt-2"><div class="w-8 h-8 rounded-lg bg-teal-700 text-white grid place-items-center font-black">L</div><div class="font-bold">LabPulse</div></div>' + inner + '</div>';
+        return '<div class="min-h-screen max-w-md mx-auto px-4 pb-4 flex flex-col gap-4">' +
+          '<div class="-mx-4 px-4 py-3 flex items-center gap-2.5 text-white" style="background:linear-gradient(135deg,#0b1220,#134e4a)"><div class="lp-logo !w-8 !h-8">' + icon('pulse', 'w-4 h-4') + '</div>' +
+          '<div class="font-bold tracking-tight">LabPulse</div><span class="ml-auto text-xs text-teal-200 flex items-center gap-1.5">' + icon('lock', 'w-3.5 h-3.5') + 'Verified check-in</span></div>' + inner + '</div>';
       };
       if (!c.claim.ok) {
-        app.innerHTML = shell('<div class="lp-card p-6 text-center"><div class="text-4xl mb-2">⚠️</div><h1 class="text-lg font-bold">Not checked in</h1>' +
+        app.innerHTML = shell('<div class="lp-card"><div class="lp-card-body text-center p-7"><div class="mx-auto w-12 h-12 rounded-2xl tone-red grid place-items-center mb-3">' + icon('alert', 'w-6 h-6') + '</div><h1 class="text-lg font-bold">Not checked in</h1>' +
           '<p class="text-slate-600 mt-2">' + esc(c.claim.message) + '</p>' +
-          '<button class="lp-btn lp-btn-primary mt-5 w-full" data-act="ci-done">Go to my dashboard</button></div>');
+          '<button class="lp-btn lp-btn-primary mt-5 w-full" data-act="ci-done">Go to my dashboard</button></div></div>');
         return;
       }
       if (c.step === 'submitting') {
-        app.innerHTML = shell('<div class="lp-card p-8 text-center"><div class="flex justify-center mb-3 text-teal-700"><span class="lp-spin" style="width:2rem;height:2rem"></span></div>' +
-          '<h1 class="text-lg font-bold">Checking… please wait</h1><p class="text-sm text-slate-500 mt-1">Verifying your scan and location.</p></div>');
+        app.innerHTML = shell('<div class="lp-card"><div class="lp-card-body p-8 text-center"><div class="flex justify-center mb-3 text-teal-700"><span class="lp-spin" style="width:2rem;height:2rem"></span></div>' +
+          '<h1 class="text-lg font-bold">Checking… please wait</h1><p class="text-sm text-slate-500 mt-1">Verifying your scan and location.</p></div></div>');
         return;
       }
       if (c.step === 'result') return renderCheckinResult(shell);
@@ -514,19 +780,20 @@
         return '<button type="button" class="lp-option" aria-pressed="' + (r.type === type) + '" data-act="ci-type" data-type="' + type + '">' +
           '<div class="font-semibold">' + title + '</div><div class="text-xs text-slate-500">' + sub + '</div></button>';
       };
+      var step = function (n, title) { return '<div class="flex items-center gap-2.5 mb-3"><span class="lp-step">' + n + '</span><span class="font-semibold">' + title + '</span></div>'; };
       app.innerHTML = shell(
-        '<div class="lp-card p-4"><div class="text-xs uppercase tracking-wide text-slate-500 font-semibold">Checking in to</div>' +
-        '<div class="text-xl font-bold">' + esc(c.claim.labName) + '</div>' +
-        '<div class="text-xs text-slate-500 mt-1">Finish within ' + Math.max(1, Math.round((c.expiresAt - Date.now()) / 60000)) + ' minutes, or scan again.</div></div>' +
-        '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">1 · Location</div><div id="loc-status">' + locHtml() + '</div></div>' +
-        '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">2 · Why are you here?</div><div class="grid gap-2">' +
+        '<div class="lp-card"><div class="lp-card-body"><div class="text-[11px] uppercase tracking-wider text-slate-500 font-bold">Checking in to</div>' +
+        '<div class="text-xl font-bold tracking-tight">' + esc(c.claim.labName) + '</div>' +
+        '<div class="text-xs text-slate-500 mt-1 flex items-center gap-1.5">' + icon('clock', 'w-3.5 h-3.5') + 'Finish within ' + Math.max(1, Math.round((c.expiresAt - Date.now()) / 60000)) + ' minutes, or scan again.</div></div></div>' +
+        '<div class="lp-card"><div class="lp-card-body">' + step(1, 'Location') + '<div id="loc-status">' + locHtml() + '</div></div></div>' +
+        '<div class="lp-card"><div class="lp-card-body">' + step(2, 'Why are you here?') + '<div class="grid gap-2">' +
         opt('COURSE', 'Regular lab course', 'Course code, name and session hours fill in from the timetable') +
         opt('EVENT', 'Event / workshop', 'Event name, coordinator and expected duration') +
         opt('RESEARCH', 'Individual research / extra hours', 'Your project, today’s purpose and the equipment you need') +
-        '</div><div id="ci-fields">' + reasonFields() + '</div></div>' +
-        (r.type ? '<div class="lp-card p-4"><div class="text-sm font-semibold mb-2">3 · What are you working on?</div>' + workFields() + '</div>' : '') +
-        (c.error ? '<div class="rounded-lg bg-red-50 text-red-800 text-sm p-3">' + esc(c.error.message) + '</div>' : '') +
-        '<div class="sticky bottom-0 bg-slate-100 pt-2 pb-4"><button class="lp-btn lp-btn-primary w-full !py-3 text-base" id="ci-submit" data-act="ci-submit" disabled>Check in</button>' +
+        '</div><div id="ci-fields">' + reasonFields() + '</div></div></div>' +
+        (r.type ? '<div class="lp-card"><div class="lp-card-body">' + step(3, 'What are you working on?') + workFields() + '</div></div>' : '') +
+        (c.error ? '<div class="rounded-xl bg-red-50 text-red-800 text-sm p-3 flex gap-2">' + icon('alert', 'w-4 h-4 flex-none mt-0.5') + '<span>' + esc(c.error.message) + '</span></div>' : '') +
+        '<div class="sticky bottom-0 pt-2 pb-4" style="background:linear-gradient(transparent,var(--lp-page) 30%)"><button class="lp-btn lp-btn-primary w-full !py-3 text-base" id="ci-submit" data-act="ci-submit" disabled>Check in</button>' +
         '<p id="ci-hint" class="text-center text-xs text-slate-500 mt-2"></p></div>'
       );
       paintSubmit();
@@ -536,15 +803,15 @@
       var res = S.checkin.result;
       var o = res.outcome;
       var v = res.visit;
-      var head = o === 'GREEN' ? ['✅', 'Checked in', 'bg-green-50 text-green-900']
-        : o === 'AMBER' ? ['🟡', 'Checked in — pending review', 'bg-amber-50 text-amber-900']
-        : o === 'EXISTING' ? ['ℹ️', 'You are already checked in', 'bg-blue-50 text-blue-900']
-        : ['⛔', 'Not checked in', 'bg-red-50 text-red-900'];
+      var head = o === 'GREEN' ? ['check', 'Checked in', 'bg-green-50 text-green-900 border border-green-200', 'tone-teal']
+        : o === 'AMBER' ? ['clock', 'Checked in — pending review', 'bg-amber-50 text-amber-900 border border-amber-200', 'tone-amber']
+        : o === 'EXISTING' ? ['check', 'You are already checked in', 'bg-blue-50 text-blue-900 border border-blue-200', 'tone-blue']
+        : ['alert', 'Not checked in', 'bg-red-50 text-red-900 border border-red-200', 'tone-red'];
       var why = (res.reasons || []).length ? '<ul class="text-sm mt-3 text-left list-disc pl-5 space-y-1">' + res.reasons.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '';
       var note = o === 'AMBER' ? '<p class="text-sm mt-3">You count as inside. Your ' + (v && v.entry_type === 'RESEARCH' ? 'lab staff' : 'faculty') + ' will confirm with one tap.</p>'
         : o === 'RED' ? '<p class="text-sm mt-3">If you are in the lab, move closer to the centre of the room and scan the QR again, or ask lab staff.</p>' : '';
       document.getElementById('app').innerHTML = shell(
-        '<div class="rounded-2xl p-6 text-center ' + head[2] + '"><div class="text-5xl mb-2">' + head[0] + '</div><h1 class="text-xl font-bold">' + head[1] + '</h1>' +
+        '<div class="rounded-2xl p-6 text-center ' + head[2] + '"><div class="mx-auto w-14 h-14 rounded-2xl grid place-items-center mb-3 ' + head[3] + '">' + icon(head[0], 'w-7 h-7') + '</div><h1 class="text-xl font-bold tracking-tight">' + head[1] + '</h1>' +
         (v ? '<p class="mt-2 font-medium">' + esc(v.lab_name) + '</p><p class="text-sm">' + esc(v.label) + ' · since ' + fmtTime(v.check_in_at) + '</p>' : '') +
         why + note + '</div>' +
         '<button class="lp-btn lp-btn-primary w-full !py-3" data-act="ci-done">Go to my dashboard</button>');
@@ -606,55 +873,104 @@
     function studentLab() { return S.status && S.status.visit ? S.status.visit.lab_id : S.lab; }
 
     function viewHome() {
-      return section('status', { live: true, height: 120, load: function () { return call('status'); }, html: htmlStatus }) +
-        '<div class="grid md:grid-cols-2 gap-4">' +
-        section('free', { live: true, load: function () { return call('freeNow', { labId: studentLab() }); }, html: htmlFree }) +
-        section('myitems', { live: true, load: function () { return call('myItems'); }, html: htmlMyItems }) +
-        '</div>' +
-        section('map', { live: true, height: 160, load: function () { return call('labMap', { labId: studentLab() }); }, html: htmlMap }) +
-        section('myhours', { load: function () { return call('myHours'); }, html: function (h) {
-          var tile = function (label, v) { return '<div><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-2xl font-bold text-teal-800">' + v + '</div></div>'; };
-          return card('My lab time', '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">' + tile('Total hours', h.total_hours) + tile('Days in lab', h.total_days) +
-            tile('This week (h)', h.week_hours) + tile('Last visit', h.last_visit || '—') + '</div>');
+      return section('status', { live: true, height: 140, load: function () { return call('status'); }, html: htmlStatus }) +
+        section('myhours', { height: 92, load: function () { return call('myHours'); }, html: function (h) {
+          return '<div class="lp-band" style="--cols:4">' +
+            statTile('Total hours', esc(h.total_hours), { icon: 'clock', tone: 'teal' }) +
+            statTile('Days in lab', esc(h.total_days), { icon: 'calendar', tone: 'blue' }) +
+            statTile('This week', esc(h.week_hours) + '<span class="text-sm font-semibold text-slate-400"> h</span>', { icon: 'activity', tone: 'violet' }) +
+            statTile('Last visit', '<span class="text-lg">' + esc(h.last_visit || '—') + '</span>', { icon: 'history', tone: 'slate' }) + '</div>';
         } }) +
-        section('mybookings', { live: true, load: function () { return call('myBookings'); }, html: htmlMyBookings }) +
-        section('recent', { load: function () { return call('myHistory'); }, html: function (d) { return card('Recent visits', htmlVisits(d.slice(0, 5))); } });
+        '<div class="grid lg:grid-cols-2 gap-5 items-start">' +
+        section('free', { live: true, load: function () { return call('freeNow', { labId: studentLab() }); }, html: htmlFree }) +
+        section('mybookings', { live: true, load: function () { return call('myBookings'); }, html: htmlMyBookings }) + '</div>' +
+        section('myitems', { live: true, height: 1, load: function () { return call('myItems'); }, html: function (d) {
+          // Only shown when there is something borrowed or requested.
+          return d.loans.some(function (l) { return l.status !== 'RETURNED'; }) || d.requests.some(function (r) { return r.status === 'PENDING'; }) ? htmlMyItems(d) : '';
+        } });
     }
 
     function htmlStatus(st) {
       var changed = !S.status || !!S.status.checkedIn !== !!st.checkedIn;
       S.status = st;
       if (changed) setTimeout(function () { paintSection('free'); }, 0);
-      var body;
+      var hero = function (bg, iconName, inner, action) {
+        return '<section class="rounded-2xl p-5 sm:p-6 text-white shadow-sm" style="background:' + bg + '">' +
+          '<div class="flex items-start gap-4 flex-wrap"><div class="w-12 h-12 rounded-2xl bg-white/15 grid place-items-center flex-none">' + icon(iconName, 'w-6 h-6') + '</div>' +
+          '<div class="min-w-0 flex-1" style="flex-basis:14rem">' + inner + '</div><div class="flex-none">' + action + '</div></div></section>';
+      };
       if (st.checkedIn) {
         var v = st.visit;
-        body = '<div class="flex items-start justify-between gap-3 flex-wrap"><div>' +
-          '<div class="flex items-center gap-2 flex-wrap"><span class="text-xl font-bold text-teal-800">Checked in · ' + dur(v.duration_ms) + '</span>' + visitBadge(v) + '</div>' +
-          '<div class="text-slate-600 mt-1">' + esc(v.lab_name) + ' · ' + esc(v.label) + '</div>' +
-          '<div class="text-xs text-slate-500 mt-1">Since ' + fmtTime(v.check_in_at) + (v.expected_end_at ? ' · closes automatically at ' + fmtTime(v.expected_end_at) + ' if you forget' : '') + '</div>' +
-          (v.review_status === 'PENDING' ? '<div class="text-xs text-amber-800 mt-2">Your check-in is waiting for a one-tap review. You count as inside meanwhile.</div>' : '') +
-          '</div><button class="lp-btn lp-btn-primary" data-act="checkout">Check out</button></div>';
-      } else if (st.ticket) {
-        body = '<div class="flex items-center justify-between gap-3 flex-wrap"><div><div class="text-xl font-bold">Scan received</div>' +
-          '<div class="text-slate-600 text-sm">Finish checking in to ' + esc(st.ticket.labName) + ' within ' + Math.max(1, Math.round(st.ticket.expiresInSec / 60)) + ' min.</div></div>' +
-          '<button class="lp-btn lp-btn-primary" data-act="resume-checkin" data-lab="' + esc(st.ticket.labId) + '" data-name="' + esc(st.ticket.labName) + '" data-exp="' + st.ticket.expiresInSec + '">Continue check-in</button></div>';
-      } else {
-        body = '<div class="flex items-center justify-between gap-3 flex-wrap"><div><div class="text-xl font-bold">Not checked in</div>' +
-          '<div class="text-slate-600 text-sm">Scan the QR on the lab monitor with your phone camera.</div></div>' +
-          '<button class="lp-btn lp-btn-primary" data-act="scan-help">Scan</button></div>';
+        var pending = v.review_status === 'PENDING';
+        return hero(pending ? 'linear-gradient(135deg,#92400e,#b45309)' : 'linear-gradient(135deg,#0f766e,#115e59)', pending ? 'clock' : 'check',
+          '<div class="text-xs uppercase tracking-wider text-white/70 font-bold">' + esc(v.lab_name) + '</div>' +
+          '<div class="text-2xl font-bold tracking-tight mt-0.5">Checked in · ' + dur(v.duration_ms) + '</div>' +
+          '<div class="text-white/85 mt-1 text-sm">' + esc(v.label) + '</div>' +
+          '<div class="text-xs text-white/70 mt-2">Since ' + fmtTime(v.check_in_at) + (v.expected_end_at ? ' · closes automatically at ' + fmtTime(v.expected_end_at) + ' if you forget' : '') + '</div>' +
+          (pending ? '<div class="text-xs mt-2 rounded-lg bg-white/15 px-2.5 py-1.5 inline-block">Waiting for a one-tap review. You’ll count in the live total once confirmed.</div>' : ''),
+          '<button class="lp-btn bg-white text-teal-900 hover:bg-teal-50" data-act="checkout">Check out</button>');
       }
-      return '<section class="lp-card p-5">' + body + '</section>';
+      if (st.ticket) {
+        return hero('linear-gradient(135deg,#1e3a8a,#1d4ed8)', 'qr',
+          '<div class="text-2xl font-bold tracking-tight">Scan received</div><div class="text-white/85 text-sm mt-1">Finish checking in to ' + esc(st.ticket.labName) + ' within ' + Math.max(1, Math.round(st.ticket.expiresInSec / 60)) + ' min.</div>',
+          '<button class="lp-btn bg-white text-blue-900 hover:bg-blue-50" data-act="resume-checkin" data-lab="' + esc(st.ticket.labId) + '" data-name="' + esc(st.ticket.labName) + '" data-exp="' + st.ticket.expiresInSec + '">Continue check-in</button>');
+      }
+      return hero('#0f1412', 'qr',
+        '<div class="text-2xl font-bold tracking-tight">Not checked in</div><div class="text-white/80 text-sm mt-1">Scan the QR on the lab monitor with your phone camera to check in.</div>',
+        '<button class="lp-btn bg-white text-slate-900 hover:bg-slate-100" data-act="scan-help">' + icon('qr') + 'How to scan</button>');
     }
 
     function htmlFree(list) {
       var inLab = S.status && S.status.checkedIn && S.status.visit.review_status !== 'PENDING';
       var pendingNote = S.status && S.status.checkedIn && !inLab;
       var chips = list.length ? '<div class="flex flex-wrap gap-2">' + list.map(function (x) {
-        return '<span class="rounded-full bg-green-50 text-green-800 border border-green-200 px-3 py-1 text-sm font-semibold">' + x.count + ' ' + esc(x.type) + '</span>';
-      }).join('') + '</div>' : empty('Nothing is free right now.');
+        return '<span class="lp-chip"><span class="lp-num font-bold text-teal-700">' + x.count + '</span> ' + esc(x.type) + '</span>';
+      }).join('') + '</div>' : empty('Nothing is free right now.', 'box');
       return card('Free right now', chips +
-        '<div class="mt-4 flex items-center gap-3 flex-wrap"><button class="lp-btn lp-btn-primary" data-act="request-asset"' + (inLab && list.length ? '' : ' disabled') + '>Request equipment</button>' +
-        (inLab ? '' : '<span class="text-xs text-slate-500">' + (pendingNote ? 'You can request equipment once your check-in is confirmed.' : 'You can request equipment while you are checked in to the lab.') + '</span>') + '</div>');
+        '<div class="mt-4 flex items-center gap-3 flex-wrap"><button class="lp-btn lp-btn-primary" data-act="request-asset"' + (inLab && list.length ? '' : ' disabled') + '>' + icon('box') + 'Request equipment</button>' +
+        (inLab ? '' : '<span class="text-xs text-slate-500">' + (pendingNote ? 'You can request equipment once your check-in is confirmed.' : 'You can request equipment while you are checked in to the lab.') + '</span>') + '</div>',
+        '<button class="text-sm font-semibold text-teal-700" data-act="tab" data-tab="equipment">Full catalog</button>', { icon: 'cpu' });
+    }
+
+    var CATEGORY_NAMES = { GPU: 'GPU workstations', COMPUTE: 'Lab computers', FABRICATION: '3D printers', DRONE: 'Drones', IOT: 'IoT hardware', SENSOR: 'Sensors & modules' };
+    var CATEGORY_ICONS = { GPU: 'cpu', COMPUTE: 'monitor', FABRICATION: 'box', DRONE: 'activity', IOT: 'cpu', SENSOR: 'pulse' };
+
+    /**
+     * Public availability catalog: every item, its status (Available / Reserved / Issued),
+     * no borrower details. Requesting needs a verified check-in; reserving follows the lab's setting.
+     */
+    function viewEquipment() {
+      return section('catalog', { live: true, height: 320, load: function () {
+        return Promise.all([call('assetsPublic', { labId: studentLab() }), call('status')]).then(function (r) { return { list: r[0], status: r[1] }; });
+      }, html: function (d) {
+        S.status = d.status;
+        var list = d.list;
+        var f = S.catFilter || 'ALL';
+        var cats = Object.keys(CATEGORY_NAMES).filter(function (c) { return list.some(function (a) { return a.category === c; }); });
+        var verified = d.status.checkedIn && d.status.visit.review_status !== 'PENDING';
+        var free = list.filter(function (a) { return a.status === 'AVAILABLE'; }).length;
+        var seg = '<div class="lp-seg">' + ['ALL'].concat(cats).map(function (c) {
+          var n = c === 'ALL' ? list.length : list.filter(function (a) { return a.category === c; }).length;
+          return '<button aria-pressed="' + (f === c) + '" data-act="cat-filter" data-cat="' + c + '">' + esc(c === 'ALL' ? 'All' : CATEGORY_NAMES[c]) + ' <span class="text-slate-400 lp-num">' + n + '</span></button>';
+        }).join('') + '</div>';
+        var shown = list.filter(function (a) { return f === 'ALL' || a.category === f; });
+        var cardsHtml = shown.length ? '<div class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">' + shown.map(function (a) {
+          var avail = a.status === 'AVAILABLE';
+          return '<div class="lp-card p-4 flex flex-col gap-3"><div class="flex items-start gap-3"><div class="lp-stat-icon tone-' + (avail ? 'teal' : 'slate') + '">' + icon(CATEGORY_ICONS[a.category] || 'box') + '</div>' +
+            '<div class="min-w-0 flex-1"><div class="font-semibold leading-snug">' + esc(a.name) + '</div><div class="text-xs text-slate-500 mt-0.5">' + esc(a.type) + (a.location ? ' · ' + esc(a.location) : '') + ' · ' + esc(a.asset_id) + '</div></div>' + assetBadge(a.status) + '</div>' +
+            '<div class="flex gap-2 mt-auto">' +
+            (can('requestAsset') ? '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="request-asset" data-id="' + esc(a.asset_id) + '"' + (avail && verified ? '' : ' disabled') + '>Request now</button>' : '') +
+            (can('bookAsset') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="booking-new" data-id="' + esc(a.asset_id) + '"' + (bookingGated() || a.status === 'UNAVAILABLE' ? ' disabled' : '') + '>Reserve a slot</button>' : '') +
+            '</div></div>';
+        }).join('') + '</div>' : empty('Nothing in this category.', 'box');
+        var note = verified ? '' : '<div class="rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm px-4 py-3 flex gap-2">' + icon('lock', 'w-4 h-4 flex-none mt-0.5') +
+          '<span>' + (d.status.checkedIn ? 'Your check-in is waiting for review. Requests open once it is confirmed.' : 'You can request equipment only while you are checked in to the lab. Scan the QR on the lab monitor first.') + '</span></div>';
+        return '<div class="lp-band" style="--cols:4">' + statTile('Items in the lab', esc(list.length), { icon: 'box', tone: 'slate' }) +
+          statTile('Free right now', esc(free), { icon: 'check', tone: 'teal' }) +
+          statTile('Reserved', esc(list.filter(function (a) { return a.status === 'RESERVED'; }).length), { icon: 'calendar', tone: 'amber' }) +
+          statTile('Issued / in use', esc(list.filter(function (a) { return a.status === 'ISSUED' || a.status === 'IN_USE'; }).length), { icon: 'users', tone: 'blue' }) + '</div>' +
+          note + seg + cardsHtml + '<p class="text-xs text-slate-500">Borrower details are never shown here. Status comes from LabPulse records.</p>';
+      } }) + section('map', { live: true, height: 240, load: function () { return call('labMap', { labId: studentLab() }); }, html: htmlMap });
     }
 
     function bookingBadge(b) {
@@ -674,8 +990,16 @@
           (b.status === 'BOOKED' ? '<div class="text-xs text-teal-800">Check in to the lab at that time; lab staff start your session.</div>' : '') + '</div>' +
           '<div class="flex items-center gap-2">' + bookingBadge(b) + (open ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="booking-cancel" data-id="' + esc(b.booking_id) + '">Cancel</button>' : '') + '</div></li>';
       });
-      return card('My reservations', (rows.length ? '<ul class="divide-y divide-slate-100">' + rows.join('') + '</ul>' : empty('No reservations. Reserve a 3D printer, drone or GPU node for a time slot.')),
-        can('bookAsset') ? '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="booking-new">Reserve a slot</button>' : '');
+      var gated = bookingGated();
+      return card('My reservations', (rows.length ? '<ul class="divide-y divide-slate-100">' + rows.join('') + '</ul>' : empty('No reservations. Reserve a 3D printer, drone or GPU node for a time slot.', 'calendar')) +
+        (can('bookAsset') && gated ? '<p class="text-xs text-slate-500 mt-3">Reservations open once you are checked in to the lab and verified.</p>' : ''),
+        can('bookAsset') ? '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="booking-new"' + (gated ? ' disabled' : '') + '>' + icon('plus') + 'Reserve a slot</button>' : '', { icon: 'calendar' });
+    }
+
+    /** True while reservations are closed to this student (proposal C: CHECKED_IN and verified). */
+    function bookingGated() {
+      if (!S.init.bookingRequiresCheckin) return false;
+      return !(S.status && S.status.checkedIn && S.status.visit && S.status.visit.review_status !== 'PENDING');
     }
 
     function htmlBookingsToday(list) {
@@ -715,7 +1039,7 @@
       }).join('');
       var legend = '<div class="flex flex-wrap gap-2 mt-3">' + badge('green', 'Available') + badge('amber', 'Reserved') + badge('blue', 'Issued / in use') + badge('gray', 'Unavailable') + '</div>';
       return card('Live lab map', '<div class="lp-map" style="grid-template-columns:repeat(' + m.cols + ',minmax(0,1fr))">' + cells + '</div>' + legend +
-        '<p class="text-xs text-slate-500 mt-2">' + esc(m.note) + '</p>', '<span class="text-xs text-slate-500">' + m.occupancy + ' people inside</span>');
+        '<p class="text-xs text-slate-500 mt-2">' + esc(m.note) + '</p>', '<span class="text-xs text-slate-500">' + m.occupancy + (m.occupancy === 1 ? ' person' : ' people') + ' inside</span>');
     }
 
     function htmlVisits(list) {
@@ -782,9 +1106,9 @@
     }
 
     function htmlStudentLookup(r) {
-      var tile = function (label, v) { return '<div class="lp-card p-3"><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-xl font-bold">' + esc(v) + '</div></div>'; };
+      var tile = function (label, v) { return statTile(label, esc(v)); };
       return '<div class="space-y-3"><div><div class="font-semibold text-lg">' + esc(r.user.name || r.user.email) + '</div><div class="text-sm text-slate-500">' + esc(r.user.reg_no) + ' · ' + esc(r.user.email) + (r.user.active ? '' : ' · ' + badge('gray', 'Removed')) + '</div></div>' +
-        '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2">' + tile('Days in lab', r.total_days) + tile('Total hours', r.total_hours) + tile('Visits', r.total_visits) + tile('Last 7 days (h)', r.week_hours) + '</div>' +
+        '<div class="lp-band" style="--cols:4">' + tile('Days in lab', r.total_days) + tile('Total hours', r.total_hours) + tile('Visits', r.total_visits) + tile('Last 7 days (h)', r.week_hours) + '</div>' +
         (r.projects.length ? '<div><div class="text-sm font-semibold mb-1">Projects</div>' + table(['Project', 'Timeline', 'Hours', 'Status'], r.projects.map(function (p) {
           return [esc(p.title), esc(p.start_date + ' → ' + p.end_date), p.hours, projectStatus(p)];
         })) + '</div>' : '') +
@@ -794,9 +1118,9 @@
     }
 
     function htmlAssetLookup(r) {
-      var tile = function (label, v) { return '<div class="lp-card p-3"><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-xl font-bold">' + esc(v) + '</div></div>'; };
+      var tile = function (label, v) { return statTile(label, esc(v)); };
       return '<div class="space-y-3"><div><div class="font-semibold text-lg">' + esc(r.asset.name) + '</div><div class="text-sm text-slate-500">' + esc(r.asset.asset_id + ' · ' + r.asset.type) + ' · ' + assetBadge(r.asset.status) + '</div></div>' +
-        '<div class="grid grid-cols-3 gap-2">' + tile('People', r.distinct_users) + tile('Uses', r.total_uses) + tile('Hours', r.total_hours) + '</div>' +
+        '<div class="lp-band" style="--cols:3">' + tile('People', r.distinct_users) + tile('Uses', r.total_uses) + tile('Hours', r.total_hours) + '</div>' +
         (r.people.length ? '<p class="text-sm"><b>Used by:</b> ' + esc(r.people.join(', ')) + '</p>' : '') +
         (r.uses.length ? table(['Date', 'Who', 'Reg. no', 'Hours', 'Purpose / project', 'How'], r.uses.map(function (u) {
           return [esc(u.date), esc(u.who), esc(u.reg_no), u.hours, esc(u.purpose || ''), esc(u.kind)];
@@ -879,27 +1203,58 @@
 
     /* ================= lab staff (FR-26, FR-22) ================= */
 
+    /** Live page: one stats strip, then one focused sub-view at a time instead of every panel at once. */
+    var LIVE_VIEWS = [['overview', 'Overview'], ['desk', 'Equipment desk'], ['activity', 'Activity'], ['map', 'Floor map']];
     function viewLive() {
-      return section('strip', { live: true, height: 84, load: function () { return call('staffSummary', { labId: S.lab }); }, html: function (s) {
+      var v = S.liveView || 'overview';
+      var views = LIVE_VIEWS.filter(function (x) { return x[0] !== 'desk' || can('handshake') || can('bookingsToday'); });
+      var seg = '<div class="lp-seg" role="tablist">' + views.map(function (x) {
+        return '<button aria-pressed="' + (x[0] === v) + '" data-act="live-view" data-view="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div>';
+      var strip = section('strip', { live: true, height: 96, load: function () { return call('staffSummary', { labId: S.lab }); }, html: function (s) {
         S.occ = s.occupancy;
         S.occPending = s.pending_inside;
         paintOcc();
-        var tile = function (label, value, color, tab) {
-          return '<div class="lp-card p-3 ' + (tab ? 'cursor-pointer' : '') + '"' + (tab ? ' data-act="tab" data-tab="' + tab + '"' : '') + '><div class="text-xs text-slate-500 font-semibold">' + label + '</div><div class="text-2xl font-bold ' + (color || '') + '">' + value + '</div></div>';
-        };
-        return '<div class="grid grid-cols-2 sm:grid-cols-5 gap-3">' + tile('Inside now', s.occupancy + (s.pending_inside ? '<span class="text-sm text-amber-700 font-semibold"> +' + s.pending_inside + ' pending</span>' : ''), 'text-teal-700') + tile('Items out', s.items_out) +
-          tile('Overdue', s.overdue, s.overdue ? 'text-red-700' : '') + tile('Pending requests', s.pending_requests, s.pending_requests ? 'text-amber-700' : '') +
-          tile('Pending reviews', s.pending_reviews, s.pending_reviews ? 'text-amber-700' : '', 'reviews') + '</div>';
-      } }) +
-      '<div class="grid lg:grid-cols-3 gap-4 items-start">' +
-      section('activity', { live: true, height: 300, load: function () { return call('activity', { labId: S.lab }); }, html: htmlActivity }) +
-      '<div class="space-y-4">' + section('smap', { live: true, height: 200, load: function () { return call('labMap', { labId: S.lab }); }, html: htmlMap }) +
-      section('inside', { live: true, load: function () { return call('inside', { labId: S.lab }); }, html: htmlInside }) + '</div>' +
-      '<div class="space-y-4">' + (can('bookingsToday') ? section('bookings', { live: true, load: function () { return call('bookingsToday', { labId: S.lab }); }, html: htmlBookingsToday }) : '') +
-      (can('handshake') ? section('handshake', { live: true, height: 300, load: function () { return call('handshake', { labId: S.lab }); }, html: htmlHandshake }) : '') +
-      '</div></div>';
+        return '<div class="lp-band" style="--cols:5">' +
+          statTile('Inside now', esc(s.occupancy), { sub: s.pending_inside ? '<span class="text-amber-700">+' + s.pending_inside + ' awaiting review</span>' : 'Verified check-ins' }) +
+          statTile('Items out', esc(s.items_out), { sub: 'On loan now' }) +
+          statTile('Overdue', '<span' + (s.overdue ? ' class="text-red-700"' : '') + '>' + esc(s.overdue) + '</span>', { sub: s.overdue ? 'Reminders sent' : 'Nothing late' }) +
+          statTile('Pending requests', esc(s.pending_requests), { sub: 'Waiting for handover' }) +
+          statTile('Pending reviews', esc(s.pending_reviews), { sub: can('reviewQueue') ? 'Open the review queue →' : 'Awaiting faculty', tab: can('reviewQueue') ? 'reviews' : '' }) + '</div>';
+      } });
+      var body;
+      if (v === 'desk') {
+        body = '<div class="grid lg:grid-cols-2 gap-5 items-start">' +
+          (can('bookingsToday') ? section('bookings', { live: true, load: function () { return call('bookingsToday', { labId: S.lab }); }, html: htmlBookingsToday }) : '') +
+          (can('handshake') ? section('handshake', { live: true, height: 300, load: function () { return call('handshake', { labId: S.lab }); }, html: htmlHandshake }) : '') + '</div>';
+      } else if (v === 'activity') {
+        body = section('activity', { live: true, height: 300, load: function () { return call('activity', { labId: S.lab }); }, html: htmlActivity });
+      } else if (v === 'map') {
+        body = section('smap', { live: true, height: 300, load: function () { return call('labMap', { labId: S.lab }); }, html: htmlMap });
+      } else {
+        body = section('today', { height: 260, load: function () { return call('reportDaily', { labId: S.lab }) /* the server's today, not the device's */; }, html: function (r) {
+            var peak = (r.peaks || [])[0];
+            return card('People in the lab today, by hour', hourChart(r.hours) +
+              '<p class="text-xs text-slate-500 mt-3">Each column counts different people present during that hour.' + (peak ? ' Busiest: ' + String(peak.hour).padStart(2, '0') + ':00, up to ' + peak.peak + ' at once.' : '') + '</p>',
+              '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="reload-today">Refresh</button>');
+          } }) +
+          section('inside', { live: true, load: function () { return call('inside', { labId: S.lab }); }, html: htmlInside });
+      }
+      return strip + seg + body;
     }
 
+    function htmlInside(list) {
+      var rows = list.map(function (p) {
+        return [
+          '<div class="font-medium">' + esc(p.name) + '</div><div class="text-xs text-slate-500 lp-mono">' + esc(p.reg_no) + '</div>',
+          esc(p.system), esc(p.project || '—'), '<span class="lp-num">' + fmtTime(p.check_in_at) + '</span><div class="text-xs text-slate-500">' + dur(p.duration_ms) + '</div>',
+          visitBadge(p),
+          can('forceCheckOut') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="force-out" data-id="' + esc(p.visit_id) + '" data-name="' + esc(p.name) + '">Check out</button>' : ''
+        ];
+      });
+      return card('Who’s in the lab', list.length ? table(['Person', 'System', 'Project', 'Since', 'Status', ''], rows) : empty('Nobody is checked in.', 'users'),
+        can('manualEntry') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="manual-entry">Manual entry</button>' : '');
+    }
     function htmlActivity(list) {
       var meta = {
         CHECK_IN: ['green', 'Check-in'], CHECK_OUT: ['gray', 'Check-out'], AUTO_CLOSE: ['gray', 'Auto-closed'], STAFF_CHECK_OUT: ['gray', 'Staff check-out'],
@@ -915,14 +1270,6 @@
       }).join('') + '</ul>' : empty('No activity yet today.'));
     }
 
-    function htmlInside(list) {
-      return card('Who’s in the lab', (list.length ? '<ul class="divide-y divide-slate-100 max-h-96 overflow-y-auto">' + list.map(function (p) {
-        return '<li class="py-2 text-sm flex items-center justify-between gap-2"><div><div class="font-medium">' + esc(p.name) + ' ' + visitBadge(p) + '</div>' +
-          '<div class="text-xs text-slate-500">' + esc(p.reg_no) + ' · ' + esc(entryLabel(p.entry_type)) + ' · ' + dur(p.duration_ms) + '</div>' +
-          '<div class="text-xs mt-0.5">🖥 ' + esc(p.system) + (p.project ? ' · 📁 ' + esc(p.project) : '') + '</div></div>' +
-          (can('forceCheckOut') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="force-out" data-id="' + esc(p.visit_id) + '" data-name="' + esc(p.name) + '">Check out</button>' : '') + '</li>';
-      }).join('') + '</ul>' : empty('Nobody is checked in.')), can('manualEntry') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="manual-entry">Manual entry</button>' : '');
-    }
 
     function htmlHandshake(d) {
       var pending = d.pending.length ? '<ul class="space-y-2">' + d.pending.map(function (r) {
@@ -1003,7 +1350,7 @@
     function viewReports() {
       if (!can('reportDaily')) S.report.kind = 'export';
       var k = S.report.kind;
-      var sub = function (id, label) { return '<button class="lp-btn lp-btn-sm ' + (k === id ? 'lp-btn-primary' : 'lp-btn-ghost') + '" data-act="report-kind" data-kind="' + id + '">' + label + '</button>'; };
+      var sub = function (id, label) { return '<button aria-pressed="' + (k === id) + '" data-act="report-kind" data-kind="' + id + '">' + label + '</button>'; };
       var controls = k === 'daily' ? field('Date', input('date', S.report.date || todayKey(), 'type="date" id="rep-date"'))
         : k === 'monthly' ? field('Month', input('month', S.report.month || monthKey(), 'type="month" id="rep-month"'))
         : '<div class="grid grid-cols-2 gap-3">' + field('From', input('from', S.report.from || todayKey(), 'type="date" id="rep-from"')) + field('To', input('to', S.report.to || todayKey(), 'type="date" id="rep-to"')) + '</div>' +
@@ -1012,7 +1359,7 @@
         ? '<button class="lp-btn lp-btn-primary" data-act="export-csv">Download CSV</button><button class="lp-btn lp-btn-ghost" data-act="export-xlsx">Download Excel (.xlsx)</button><button class="lp-btn lp-btn-ghost" data-act="export-drive">Save CSV to Drive</button>'
         : (can('reportDaily') ? '<button class="lp-btn lp-btn-primary" data-act="report-run">Show report</button><button class="lp-btn lp-btn-ghost" data-act="report-pdf">Save PDF to Drive</button>' : '') +
           (k === 'daily' && can('emailDigest') ? '<button class="lp-btn lp-btn-ghost" data-act="report-email">Email digest now</button>' : '');
-      return '<div class="flex flex-wrap gap-2">' + (can('reportDaily') ? sub('daily', 'Daily digest') + sub('monthly', 'Monthly audit') + sub('range', 'Date range') : '') + (can('exportRange') ? sub('export', 'CSV export') : '') + '</div>' +
+      return '<div class="lp-seg">' + (can('reportDaily') ? sub('daily', 'Daily digest') + sub('monthly', 'Monthly audit') + sub('range', 'Date range') : '') + (can('exportRange') ? sub('export', 'CSV / Excel export') : '') + '</div>' +
         card(k === 'export' ? 'ERP-ready export (CSV / Excel)' : 'Report', '<div class="max-w-md space-y-3">' + controls + '</div><div class="flex flex-wrap gap-2 mt-4">' + buttons + '</div>' +
           (k === 'export' ? '<p class="text-xs text-slate-500 mt-3">One flat table, fixed column names, ISO 8601 dates with the +05:30 offset. Mobile numbers are never exported.' + (role() === 'FACULTY' ? ' You can export visits to your own sessions only.' : '') + '</p>' : '')) +
         '<div id="report-out"></div>';
@@ -1029,10 +1376,12 @@
     }
 
     function htmlReport(r) {
-      var kpis = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3">' + r.kpis.map(function (k) {
-        return '<div class="lp-card p-3"><div class="text-xs text-slate-500 font-semibold">' + esc(k[0]) + '</div><div class="text-lg font-bold">' + esc(k[1]) + '</div></div>';
+      var kpis = '<div class="lp-band" style="--cols:4">' + r.kpis.map(function (k) {
+        var long = String(k[1]).length > 14;
+        return statTile(k[0], long ? '<span class="text-sm font-semibold leading-snug block mt-1">' + esc(k[1]) + '</span>' : esc(k[1]));
       }).join('') + '</div>';
-      return '<div class="space-y-4"><div><h2 class="text-lg font-bold">' + esc(r.title) + '</h2><p class="text-sm text-slate-500">' + esc(r.subtitle) + '</p></div>' + kpis +
+      var chart = r.hours ? card('People present by hour', hourChart(r.hours) + '<p class="text-xs text-slate-500 mt-2">The same numbers are in the hourly table below.</p>', '', { icon: 'chart' }) : '';
+      return '<div class="space-y-5"><div><h2 class="text-lg font-bold tracking-tight">' + esc(r.title) + '</h2><p class="text-sm text-slate-500">' + esc(r.subtitle) + '</p></div>' + kpis + chart +
         r.sections.map(function (s) {
           return card(esc(s.heading), (s.rows.length ? table(s.columns, s.rows.map(function (row) { return row.map(esc); })) : empty('No records for this period.')) +
             (s.note ? '<p class="text-xs text-slate-500 mt-2">' + esc(s.note) + '</p>' : ''));
@@ -1143,7 +1492,13 @@
     function reloadVisible() { S.active.forEach(loadSection); }
 
     var ACTIONS = {
-      'tab': function (d) { S.tab = d.tab; render(); window.scrollTo(0, 0); },
+      'go': function (d) { goPage(d.page); },
+      'tab': function (d) { if (!d.tab) return; S.tab = d.tab; S.navOpen = false; render(); window.scrollTo(0, 0); },
+      'nav-toggle': function () { S.navOpen = !S.navOpen; var sh = document.getElementById('shell'); if (sh) sh.classList.toggle('nav-open', S.navOpen); },
+      'nav-close': function () { S.navOpen = false; var sh = document.getElementById('shell'); if (sh) sh.classList.remove('nav-open'); },
+      'reload-today': function () { loadSection('today'); },
+      'live-view': function (d) { S.liveView = d.view; render(); },
+      'cat-filter': function (d) { S.catFilter = d.cat; paintSection('catalog'); },
       'reload-sections': reloadVisible,
       'modal-close': closeModal,
       'modal-backdrop': function (d, el, ev) { if (ev.target === el) closeModal(); },
@@ -1163,12 +1518,12 @@
           });
         }, 'Check out');
       },
-      'booking-new': function () {
+      'booking-new': function (d) {
         var labId = studentLab();
         Promise.all([call('assetsPublic', { labId: labId }), call('myProjects')]).then(function (res) {
           var items = res[0].filter(function (a) { return a.status !== 'UNAVAILABLE'; });
           var projects = res[1].filter(function (p) { return p.status === 'ACTIVE'; });
-          S.bookingAsset = items.length ? items[0].asset_id : '';
+          S.bookingAsset = d.id || (items.length ? items[0].asset_id : '');
           openModal('Reserve a slot',
             field('Item', select('assetId', items.map(function (a) { return [a.asset_id, a.type + ' — ' + a.name]; }), S.bookingAsset, 'data-schedule')) +
             '<div class="grid grid-cols-3 gap-3">' + field('Date', input('date', todayKey(), 'type="date" required data-schedule')) +
@@ -1198,13 +1553,13 @@
           return call('finishBooking', { bookingId: d.id, condition: v.condition, note: v.note }).then(function () { toast('Session finished.'); reloadVisible(); });
         }, 'Finish');
       },
-      'request-asset': function () {
+      'request-asset': function (d) {
         var labId = studentLab();
         call('assetsPublic', { labId: labId }).then(function (list) {
           var free = list.filter(function (a) { return a.status === 'AVAILABLE'; });
           if (!free.length) return toast('Nothing is free right now.', 'warn');
           openModal('Request equipment',
-            field('Item', select('assetId', free.map(function (a) { return [a.asset_id, a.type + ' — ' + a.name + (a.location ? ' (' + a.location + ')' : '')]; }), '')) +
+            field('Item', select('assetId', free.map(function (a) { return [a.asset_id, a.type + ' — ' + a.name + (a.location ? ' (' + a.location + ')' : '')]; }), d.id || '')) +
             field('For how many hours?', input('hours', S.init.defaultLoanHours, 'type="number" min="1" max="' + S.init.maxLoanHours + '"')) +
             field('Note for lab staff (optional)', input('note', '')) +
             '<p class="text-xs text-slate-500">The item is held for you. Collect it from lab staff, who confirm the handover.</p>',
@@ -1485,6 +1840,22 @@
       }
     };
 
+    var tipEl = null;
+    function hideTip() { if (tipEl) { tipEl.remove(); tipEl = null; } }
+    document.addEventListener('mouseover', function (ev) {
+      var t = ev.target && ev.target.closest ? ev.target.closest('[data-tip]') : null;
+      if (!t) return hideTip();
+      if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'lp-tip'; document.body.appendChild(tipEl); }
+      tipEl.textContent = t.getAttribute('data-tip');
+    });
+    document.addEventListener('mousemove', function (ev) {
+      if (!tipEl) return;
+      var x = Math.min(ev.clientX + 12, window.innerWidth - tipEl.offsetWidth - 8);
+      tipEl.style.left = x + 'px';
+      tipEl.style.top = (ev.clientY - tipEl.offsetHeight - 10) + 'px';
+    });
+    document.addEventListener('scroll', hideTip, true);
+
     document.addEventListener('click', function (ev) {
       var el = ev.target.closest('[data-act]');
       if (!el) return;
@@ -1607,6 +1978,7 @@
 
     function afterInit() {
       S.lab = S.lab || (S.init.labs[0] && S.init.labs[0].lab_id) || null;
+      if (S.page === 'checkin' && !S.init.me.registered) { render(); return; }
       if (BOOT.view === 'checkin' && BOOT.claim && S.init.me.registered && !S._claimShown) {
         S._claimShown = true;
         startCheckin(BOOT.claim);
@@ -1616,8 +1988,10 @@
       refreshOcc();
     }
 
-    if (BOOT.error || !S.init) {
-      renderFatal(BOOT.error || { message: 'LabPulse could not start.' });
+    if (!S.init) {
+      // No usable identity: public pages still work; dashboard links lead to the login page.
+      if (!PUBLIC_PAGES[S.page]) S.page = 'login';
+      render();
     } else {
       afterInit();
       setInterval(tick, Math.max(5000, Math.min(10000, S.init.pollMs || 8000)));

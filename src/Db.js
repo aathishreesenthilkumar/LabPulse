@@ -8,6 +8,14 @@
 var Db = (function () {
   var ss_ = null;
   var tables_ = {};
+  var indexes_ = {}; // table -> column -> Map(value -> first row with it), built on first use
+
+  // Tabs whose first column is not a unique ID (or that are append-only logs too large to check).
+  var NON_UNIQUE_ = { AuditLog: true, UsageDaily: true, AssetUsageDaily: true, Enrollments: true };
+
+  function dropIndexes(name) {
+    delete indexes_[name];
+  }
 
   function spreadsheet() {
     if (ss_) return ss_;
@@ -88,21 +96,36 @@ var Db = (function () {
     return null;
   }
 
+  /** Indexed lookup: the first row whose `key` column equals `value`. O(1) after the first call. */
+  function findBy(name, key, value) {
+    var byTable = indexes_[name] || (indexes_[name] = {});
+    var idx = byTable[key];
+    if (!idx) {
+      idx = byTable[key] = new Map();
+      all(name).forEach(function (r) {
+        if (!idx.has(r[key])) idx.set(r[key], r);
+      });
+    }
+    return idx.get(value) || null;
+  }
+
   function byId(name, id) {
-    var key = cols(name)[0];
-    return findOne(name, function (r) {
-      return r[key] === id;
-    });
+    return findBy(name, cols(name)[0], id);
   }
 
   function insert(name, obj) {
     var key = cols(name)[0];
     if (!obj[key]) fail_('INVALID', name + ': ' + key + ' is required');
+    if (!NON_UNIQUE_[name] && byId(name, String(obj[key]))) fail_('INVALID', name + ': ' + key + ' "' + obj[key] + '" already exists');
     var row = toRow(name, obj);
     var sh = sheet(name);
     sh.appendRow(row);
     var stored = toObj(name, row, sh.getLastRow());
     if (tables_[name]) tables_[name].push(stored);
+    var byTable = indexes_[name] || {};
+    Object.keys(byTable).forEach(function (k) {
+      if (!byTable[k].has(stored[k])) byTable[k].set(stored[k], stored);
+    });
     return stored;
   }
 
@@ -115,6 +138,7 @@ var Db = (function () {
     });
     sh.getRange(start, 1, rows.length, cols(name).length).setValues(rows);
     delete tables_[name];
+    dropIndexes(name);
   }
 
   /** Writes patch into the stored row (and the cached object) in one range call. */
@@ -131,12 +155,16 @@ var Db = (function () {
     Object.keys(normalised).forEach(function (k) {
       rowObj[k] = normalised[k];
     });
+    // An indexed column changed value: rebuild that table's indexes on next use.
+    var byTable = indexes_[name];
+    if (byTable && Object.keys(patch).some(function (k) { return byTable[k]; })) dropIndexes(name);
     return rowObj;
   }
 
   function remove(name, rowObj) {
     sheet(name).deleteRow(rowObj._row);
     delete tables_[name];
+    dropIndexes(name);
   }
 
   /** Replaces every data row; used to rebuild ActiveVisits during reconciliation. */
@@ -152,6 +180,7 @@ var Db = (function () {
       sh.getRange(2, 1, rows.length, cols(name).length).setValues(rows);
     }
     delete tables_[name];
+    dropIndexes(name);
   }
 
   /** Last n rows without reading the whole tab (activity stream, audit tail). */
@@ -169,6 +198,7 @@ var Db = (function () {
 
   function reset() {
     tables_ = {};
+    indexes_ = {};
   }
 
   return {
@@ -178,6 +208,7 @@ var Db = (function () {
     find: find,
     findOne: findOne,
     byId: byId,
+    findBy: findBy,
     insert: insert,
     insertMany: insertMany,
     update: update,
@@ -188,6 +219,7 @@ var Db = (function () {
     forget: function () {
       ss_ = null;
       tables_ = {};
+      indexes_ = {};
     }
   };
 })();

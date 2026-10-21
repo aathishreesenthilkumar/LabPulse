@@ -87,13 +87,8 @@ var Monitoring = {
    */
   labMap: function (labId) {
     var lab = Settings.lab(labId);
-    var inUse = Attendance.systemsInUse(lab.lab_id);
     var cells = Assets.publicList(labId).filter(function (a) {
       return a.map_x !== null && a.map_y !== null;
-    }).map(function (a) {
-      // A system someone is checked in at shows as in use, even though it is not on loan.
-      if (inUse[a.asset_id] && a.status === 'AVAILABLE') a.status = 'IN_USE';
-      return a;
     });
     return {
       cols: lab.map_cols, rows: lab.map_rows, cells: cells,

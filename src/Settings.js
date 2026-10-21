@@ -40,6 +40,7 @@ var Settings = {
     booking_advance_days: 14, // how far ahead a slot can be reserved
     no_show_minutes: 15, // a confirmed slot not started by then goes to the next in the queue
     max_open_bookings: 3,
+    booking_requires_checkin: true, // proposal C: only a CHECKED_IN student may request equipment, including time slots
     missing_list_email: true, // email faculty the missing students after each course session
     archive_after_months: 3, // closed rows older than this move to the yearly archive spreadsheet
     backup_keep_days: 14, // daily backups kept; older ones keep one copy per month
@@ -228,6 +229,7 @@ var Settings = {
       if (!(n >= ints[k][0] && n <= ints[k][1])) fail_('INVALID', k + ' must be between ' + ints[k][0] + ' and ' + ints[k][1] + '.');
       next[k] = n;
     });
+    next.booking_requires_checkin = next.booking_requires_checkin === true || next.booking_requires_checkin === 'true' || next.booking_requires_checkin === 'on';
     next.missing_list_email = next.missing_list_email === true || next.missing_list_email === 'true' || next.missing_list_email === 'on';
     if (next.default_loan_hours > next.max_loan_hours) fail_('INVALID', 'Default loan hours cannot exceed the maximum.');
     ['reports_folder_id', 'template_doc_id', 'backup_folder_id'].forEach(function (k) {

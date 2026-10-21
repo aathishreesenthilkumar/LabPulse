@@ -10,12 +10,15 @@ var Assets = {
 
   /** FR-20: public availability, no borrower details. */
   publicList: function (labId) {
+    var inUse = Attendance.systemsInUse(labId);
     return Db.find('Assets', function (a) {
       return a.lab_id === labId && a.status !== STATUS.ASSET.RETIRED;
     }).map(function (a) {
+      // A system someone is checked in at is in use, even though it is not on loan.
+      var status = a.status === STATUS.ASSET.AVAILABLE && inUse[a.asset_id] ? 'IN_USE' : Assets.PUBLIC_STATUS[a.status] || a.status;
       return {
         asset_id: a.asset_id, name: a.name, category: a.category, type: a.type,
-        status: Assets.PUBLIC_STATUS[a.status] || a.status, condition: a.condition,
+        status: status, condition: a.condition,
         location: a.location, map_x: U.num(a.map_x, null), map_y: U.num(a.map_y, null)
       };
     });
@@ -66,6 +69,8 @@ var Assets = {
         fail_('PENDING_REVIEW', 'Your check-in is waiting for review. You can request equipment once it is confirmed.');
       }
       if (asset.status !== STATUS.ASSET.AVAILABLE) fail_('UNAVAILABLE', asset.name + ' is not available right now.');
+      var at = Attendance.systemsInUse(asset.lab_id)[asset.asset_id];
+      if (at && at !== ctx.email) fail_('UNAVAILABLE', asset.name + ' is in use by someone working in the lab right now.');
       var now0 = U.now();
       var held = Bookings.heldByOther(asset.asset_id, ctx.email, now0, new Date(now0.getTime() + hours * 3600000));
       if (held) fail_('UNAVAILABLE', asset.name + ' is reserved from ' + U.fmt(held.start_at) + '. Reserve another slot instead.');

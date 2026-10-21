@@ -26,9 +26,7 @@ var Auth = {
     var key = 'user:' + email;
     var cached = Cache.getJson(key);
     if (cached) return cached.none ? null : cached;
-    var row = Db.findOne('Users', function (u) {
-      return u.email === email;
-    });
+    var row = Db.findBy('Users', 'email', email);
     var user = row ? Auth.publicUser(row) : null;
     Cache.putJson(key, user || { none: true }, APP.USER_CACHE_SEC);
     return user;

@@ -87,8 +87,9 @@ var ROUTES = {
   monitorTick: { roles: OPS_, fn: function (ctx, p) { return Monitoring.monitorTick(p.labId); } },
 
   // Lab management: coordinator adds/removes facilities and students
-  inventorySave: { roles: MGR_, fn: function (ctx, p) { return Assets.save(ctx, p); } },
-  inventoryRemove: { roles: MGR_, fn: function (ctx, p) { return Assets.remove(ctx, p); } },
+  // Proposal A: the Lab In-charge / Staff manage the hardware inventory (add/edit/remove).
+  inventorySave: { roles: OPS_, fn: function (ctx, p) { return Assets.save(ctx, p); } },
+  inventoryRemove: { roles: OPS_, fn: function (ctx, p) { return Assets.remove(ctx, p); } },
   sessionSave: { roles: MGR_, fn: function (ctx, p) { return Api.sessionSave(ctx, p); } },
   students: { roles: MGR_, fn: function () { return Auth.listStudents(); } },
   manageStudent: { roles: MGR_, fn: function (ctx, p) { return Auth.manageStudent(ctx, p); } },
@@ -157,6 +158,7 @@ var Api = {
       monitorPollMs: g.monitor_poll_ms,
       defaultLoanHours: g.default_loan_hours,
       maxBookingHours: g.max_booking_hours,
+      bookingRequiresCheckin: g.booking_requires_checkin,
       maxLoanHours: g.max_loan_hours,
       version: APP.VERSION
     };
@@ -292,7 +294,9 @@ var Api = {
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
-  var boot = { view: 'app', webAppUrl: ScriptApp.getService().getUrl() };
+  // Public site by default; ?view=login | signup | app open those pages directly.
+  var start = ['login', 'signup', 'app'].indexOf(p.view) !== -1 ? p.view : p.view === 'monitor' ? 'app' : 'landing';
+  var boot = { view: start, webAppUrl: ScriptApp.getService().getUrl() };
   var file = 'Index';
   try {
     var ctx = Auth.context();

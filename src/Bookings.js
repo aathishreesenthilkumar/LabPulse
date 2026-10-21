@@ -84,6 +84,12 @@ var Bookings = {
     p = p || {};
     var v = Bookings.validate(ctx, p);
     var g = Settings.global();
+    // Proposal C (reservation gating): requests need an active, verified CHECKED_IN status.
+    // A Super Admin may switch this off to allow reserving future slots in advance.
+    if (g.booking_requires_checkin && !Assets.isVerifiedIn(ctx.email, v.lab.lab_id)) {
+      Audit.log(ctx, 'BOOK', v.asset.asset_id, 'REJECTED', 'Not checked in', v.lab.lab_id);
+      fail_('NOT_CHECKED_IN', 'You can reserve equipment only while checked in to ' + v.lab.name + ' (and verified).');
+    }
     return U.plain(withLock_(function () {
       var all = Db.all('Bookings');
       var mineOpen = all.filter(function (b) { return b.user_email === ctx.email && Bookings.isOpen(b); });
@@ -170,6 +176,8 @@ var Bookings = {
       }
       var asset = Db.byId('Assets', b.asset_id);
       if (!asset || asset.status !== STATUS.ASSET.AVAILABLE) fail_('UNAVAILABLE', (asset ? asset.name : b.asset_id) + ' is not free (' + (asset ? asset.status.toLowerCase() : 'missing') + ').');
+      var sitting = Attendance.systemsInUse(b.lab_id)[asset.asset_id];
+      if (sitting && sitting !== b.user_email) fail_('UNAVAILABLE', asset.name + ' is being used by someone checked in at it. Ask them to switch systems first.');
       Db.update('Bookings', b, { status: Bookings.S.IN_USE, started_at: now, handled_by: ctx.email });
       Db.update('Assets', asset, { status: STATUS.ASSET.ISSUED, updated_at: now });
       Audit.log(ctx, 'BOOK_START', b.booking_id, 'IN_USE', b.asset_id + ' for ' + b.user_email, b.lab_id);

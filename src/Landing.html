@@ -1,0 +1,338 @@
+<!-- Public landing page, login and sign-up styles. The landing markup lives in a <template>
+     so the client can show it instantly without building it from strings. -->
+<style>
+  .lx { --paper: #f7f6f2; --paper-2: #efede6; --ink: #121212; --ink-2: #3a3a37; --muted: #6b6a64; --rule: #e2dfd6;
+        --accent: #0e7a68; --accent-ink: #0a5b4e; --night: #0f1412; --night-2: #18201d;
+        background: var(--paper); color: var(--ink); font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; }
+  .lx .mono { font-family: 'Geist Mono', ui-monospace, monospace; letter-spacing: 0; }
+  .lx .serif { font-family: 'Instrument Serif', Georgia, serif; font-weight: 400; letter-spacing: -0.01em; }
+  .lx-wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+  .lx-eyebrow { font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .lx-rule { border: 0; border-top: 1px solid var(--rule); margin: 0; }
+
+  /* nav */
+  .lx-nav { position: sticky; top: 0; z-index: 20; background: rgba(247, 246, 242, 0.86); backdrop-filter: blur(10px); border-bottom: 1px solid transparent; transition: border-color .2s; }
+  .lx-nav.scrolled { border-bottom-color: var(--rule); }
+  .lx-nav-in { display: flex; align-items: center; gap: 28px; height: 68px; }
+  .lx-mark { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 17px; letter-spacing: -0.02em; }
+  .lx-mark svg { width: 26px; height: 26px; }
+  .lx-links { display: flex; gap: 26px; font-size: 14px; color: var(--ink-2); margin-left: 12px; }
+  .lx-links a:hover { color: var(--ink); }
+  .lx-nav-cta { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .lx-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 42px; padding: 0 18px; border-radius: 999px; font-size: 14px; font-weight: 550; transition: background .15s, color .15s, border-color .15s, transform .15s; border: 1px solid transparent; white-space: nowrap; cursor: pointer; }
+  .lx-btn:active { transform: translateY(1px); }
+  .lx-btn-dark { background: var(--ink); color: #fff; }
+  .lx-btn-dark:hover { background: #2a2a28; }
+  .lx-btn-line { border-color: #cfccc2; color: var(--ink); background: transparent; }
+  .lx-btn-line:hover { border-color: var(--ink); }
+  .lx-btn-text { color: var(--ink-2); padding: 0 10px; }
+  .lx-btn-text:hover { color: var(--ink); }
+  .lx-btn-lg { height: 50px; padding: 0 24px; font-size: 15px; }
+  @media (max-width: 860px) { .lx-links { display: none; } }
+
+  /* hero */
+  .lx-hero { padding: 72px 0 40px; display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: center; }
+  .lx-h1 { font-size: clamp(44px, 6.4vw, 84px); line-height: 0.98; letter-spacing: -0.035em; font-weight: 650; margin: 22px 0 0; }
+  .lx-h1 em { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-weight: 400; letter-spacing: -0.01em; color: var(--accent); }
+  .lx-lead { font-size: 19px; line-height: 1.55; color: var(--ink-2); max-width: 34rem; margin-top: 26px; }
+  .lx-cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 34px; }
+  .lx-facts { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 0; margin-top: 48px; border-top: 1px solid var(--rule); }
+  .lx-fact { padding: 16px 28px 0 0; margin-right: 28px; border-right: 1px solid var(--rule); }
+  .lx-fact:last-child { border-right: 0; }
+  .lx-fact b { display: block; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
+  .lx-fact span { font-family: 'Geist Mono', monospace; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+  @media (max-width: 980px) { .lx-hero { grid-template-columns: 1fr; padding-top: 48px; } .lx-facts { grid-template-columns: repeat(2, auto); row-gap: 16px; } .lx-fact:nth-child(2) { border-right: 0; } }
+
+  /* hero visual: the wall screen and a phone, built in HTML */
+  .lx-stage { position: relative; min-height: 520px; }
+  .lx-screen { position: absolute; right: 0; top: 0; width: 86%; background: var(--night); color: #e8efe9; border-radius: 18px; padding: 22px; box-shadow: 0 40px 80px -30px rgba(15, 20, 18, 0.55); }
+  .lx-screen-top { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: #93a39a; }
+  .lx-live { display: inline-flex; align-items: center; gap: 6px; color: #7ee2c3; font-family: 'Geist Mono', monospace; font-size: 11px; }
+  .lx-live i { width: 7px; height: 7px; border-radius: 99px; background: #7ee2c3; box-shadow: 0 0 0 4px rgba(126, 226, 195, 0.15); }
+  .lx-screen-body { display: grid; grid-template-columns: 190px 1fr; gap: 26px; margin-top: 18px; align-items: center; }
+  .lx-qr { background: #fff; border-radius: 12px; padding: 12px; aspect-ratio: 1; }
+  .lx-qr svg { width: 100%; height: 100%; display: block; }
+  .lx-count b { font-size: 76px; line-height: 1; font-weight: 600; letter-spacing: -0.04em; display: block; color: #fff; }
+  .lx-count span { color: #93a39a; font-size: 13px; }
+  .lx-ring { margin-top: 18px; display: flex; align-items: center; gap: 10px; color: #93a39a; font-size: 12px; font-family: 'Geist Mono', monospace; }
+  .lx-ring-bar { flex: 1; height: 4px; border-radius: 4px; background: #24302b; overflow: hidden; }
+  .lx-ring-bar i { display: block; height: 100%; width: 62%; background: #7ee2c3; animation: lx-tick 8s linear infinite; }
+  @keyframes lx-tick { from { width: 100%; } to { width: 0; } }
+  .lx-phone { position: absolute; left: 0; bottom: 0; width: 214px; background: #fff; border-radius: 30px; padding: 10px; box-shadow: 0 30px 60px -25px rgba(18, 18, 18, 0.45); border: 1px solid #e7e4dc; }
+  .lx-phone-in { border-radius: 22px; background: var(--paper); padding: 16px 14px 18px; }
+  .lx-ok { width: 40px; height: 40px; border-radius: 12px; background: #d8f3ea; color: var(--accent); display: grid; place-items: center; }
+  .lx-phone h4 { margin: 12px 0 2px; font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
+  .lx-phone p { font-size: 12px; color: var(--muted); margin: 0; }
+  .lx-phone dl { margin: 14px 0 0; font-size: 12px; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; }
+  .lx-phone dt { color: var(--muted); }
+  .lx-phone dd { margin: 0; text-align: right; font-weight: 550; }
+  @media (max-width: 980px) { .lx-stage { min-height: 420px; } .lx-screen { width: 100%; position: relative; } .lx-phone { position: relative; margin: -60px 0 0 18px; } }
+  @media (max-width: 560px) { .lx-screen-body { grid-template-columns: 120px 1fr; } .lx-count b { font-size: 54px; } }
+
+  /* labs strip */
+  .lx-strip { display: flex; flex-wrap: wrap; gap: 10px 36px; align-items: center; padding: 26px 0; color: var(--muted); font-size: 14px; }
+  .lx-strip b { color: var(--ink); font-weight: 550; }
+
+  /* sections */
+  .lx-sec { padding: 104px 0; }
+  .lx-sec-head { display: grid; grid-template-columns: 1fr 1.3fr; gap: 48px; align-items: end; margin-bottom: 56px; }
+  .lx-h2 { font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.03em; font-weight: 620; margin: 14px 0 0; }
+  .lx-h2 em { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-weight: 400; color: var(--accent); }
+  .lx-sec-head p { font-size: 17px; line-height: 1.6; color: var(--ink-2); margin: 0; max-width: 36rem; }
+  @media (max-width: 860px) { .lx-sec { padding: 72px 0; } .lx-sec-head { grid-template-columns: 1fr; gap: 16px; margin-bottom: 36px; } }
+
+  .lx-steps { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--ink); }
+  .lx-step { padding: 26px 32px 6px 0; }
+  .lx-step + .lx-step { padding-left: 32px; border-left: 1px solid var(--rule); }
+  .lx-step .num { font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--accent); }
+  .lx-step h3 { font-size: 26px; letter-spacing: -0.02em; font-weight: 620; margin: 18px 0 10px; }
+  .lx-step p { color: var(--ink-2); line-height: 1.6; font-size: 15.5px; margin: 0; }
+  @media (max-width: 860px) { .lx-steps { grid-template-columns: 1fr; } .lx-step + .lx-step { border-left: 0; padding-left: 0; border-top: 1px solid var(--rule); } .lx-step { padding-bottom: 26px; } }
+
+  .lx-feature { display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center; padding: 64px 0; border-top: 1px solid var(--rule); }
+  .lx-feature.flip .lx-feature-copy { order: 2; }
+  .lx-feature h3 { font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.025em; line-height: 1.08; font-weight: 620; margin: 12px 0 16px; }
+  .lx-feature p { color: var(--ink-2); line-height: 1.65; font-size: 16.5px; margin: 0; }
+  .lx-list { margin: 22px 0 0; padding: 0; list-style: none; }
+  .lx-list li { display: grid; grid-template-columns: 16px 1fr; gap: 12px; padding: 11px 0; border-top: 1px solid var(--rule); font-size: 15px; color: var(--ink-2); }
+  .lx-list li::before { content: ''; width: 7px; height: 7px; margin-top: 8px; border-radius: 2px; background: var(--accent); }
+  @media (max-width: 860px) { .lx-feature { grid-template-columns: 1fr; gap: 32px; padding: 48px 0; } .lx-feature.flip .lx-feature-copy { order: 0; } }
+
+  .lx-panel { background: #fff; border: 1px solid var(--rule); border-radius: 16px; padding: 22px; box-shadow: 0 1px 0 rgba(18, 18, 18, 0.03); }
+  .lx-verdict { display: grid; grid-template-columns: 88px 1fr; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule); align-items: start; font-size: 14px; }
+  .lx-verdict:first-child { border-top: 0; padding-top: 0; }
+  .lx-tag { display: inline-flex; align-items: center; gap: 6px; font-family: 'Geist Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 8px; border-radius: 6px; width: max-content; }
+  .lx-tag.g { background: #dcf2e8; color: #0a5b4e; } .lx-tag.a { background: #fbefd2; color: #8a5300; } .lx-tag.r { background: #fbe1df; color: #9b2c25; }
+  .lx-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); font-size: 14px; }
+  .lx-row:first-of-type { border-top: 0; }
+  .lx-row small { color: var(--muted); display: block; font-size: 12.5px; margin-top: 2px; }
+  .lx-big { font-size: 44px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; }
+
+  .lx-roles { border-top: 1px solid var(--ink); }
+  .lx-role { display: grid; grid-template-columns: 220px 1fr; gap: 32px; padding: 22px 0; border-bottom: 1px solid var(--rule); }
+  .lx-role b { font-size: 19px; font-weight: 600; letter-spacing: -0.015em; }
+  .lx-role span { color: var(--ink-2); font-size: 15.5px; line-height: 1.6; }
+  @media (max-width: 700px) { .lx-role { grid-template-columns: 1fr; gap: 6px; } }
+
+  .lx-night { background: var(--night); color: #e7ede9; }
+  .lx-night .lx-eyebrow { color: #8fa197; }
+  .lx-night .lx-h2 em { color: #7ee2c3; }
+  .lx-night .lx-sec-head p { color: #b9c6bf; }
+  .lx-sec-grid { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid #2a3531; }
+  .lx-sec-item { padding: 26px 24px 8px 0; }
+  .lx-sec-item + .lx-sec-item { padding-left: 24px; border-left: 1px solid #2a3531; }
+  .lx-sec-item .mono { color: #7ee2c3; font-size: 12px; }
+  .lx-sec-item h4 { margin: 14px 0 8px; font-size: 17px; font-weight: 600; color: #fff; letter-spacing: -0.01em; }
+  .lx-sec-item p { margin: 0; color: #a9b8b0; font-size: 14px; line-height: 1.6; }
+  @media (max-width: 980px) { .lx-sec-grid { grid-template-columns: 1fr 1fr; } .lx-sec-item + .lx-sec-item { border-left: 0; padding-left: 0; } .lx-sec-item { border-bottom: 1px solid #2a3531; padding-bottom: 22px; } }
+
+  .lx-final { padding: 120px 0; text-align: left; }
+  .lx-final h2 { font-size: clamp(40px, 6vw, 80px); letter-spacing: -0.04em; line-height: 0.98; font-weight: 640; margin: 0; max-width: 14ch; }
+  .lx-final h2 em { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-weight: 400; color: var(--accent); }
+  .lx-foot { border-top: 1px solid var(--rule); padding: 34px 0 44px; display: flex; flex-wrap: wrap; gap: 14px 40px; justify-content: space-between; font-size: 13px; color: var(--muted); }
+
+  .lx-reveal { opacity: 0; transform: translateY(14px); animation: lx-in .7s cubic-bezier(.2,.7,.2,1) forwards; }
+  .lx-reveal.d1 { animation-delay: .08s; } .lx-reveal.d2 { animation-delay: .16s; } .lx-reveal.d3 { animation-delay: .24s; } .lx-reveal.d4 { animation-delay: .36s; }
+  @keyframes lx-in { to { opacity: 1; transform: none; } }
+
+  /* ---------- auth pages (log in / sign up) ---------- */
+  .lx-auth { min-height: 100vh; display: grid; grid-template-columns: 1fr 1fr; }
+  .lx-auth-form { display: flex; flex-direction: column; padding: 28px 40px; }
+  .lx-auth-box { width: 100%; max-width: 400px; margin: auto; padding: 40px 0; }
+  .lx-auth h1 { font-size: 40px; letter-spacing: -0.035em; font-weight: 640; line-height: 1.02; margin: 0 0 10px; }
+  .lx-auth h1 em { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-weight: 400; color: var(--accent); }
+  .lx-auth .sub { color: var(--ink-2); font-size: 15.5px; line-height: 1.55; margin: 0 0 30px; }
+  .lx-account { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 14px; background: #fff; }
+  .lx-avatar { width: 40px; height: 40px; border-radius: 99px; background: var(--ink); color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 14px; flex: none; }
+  .lx-google { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 50px; border-radius: 12px; border: 1px solid #cfccc2; background: #fff; font-weight: 550; font-size: 15px; }
+  .lx-google:hover { border-color: var(--ink); }
+  .lx-field { display: block; margin-bottom: 18px; }
+  .lx-field span { display: block; font-size: 13px; font-weight: 550; margin-bottom: 7px; color: var(--ink); }
+  .lx-field input { width: 100%; height: 48px; border-radius: 12px; border: 1px solid #d6d3ca; background: #fff; padding: 0 14px; font-size: 15px; transition: border-color .15s, box-shadow .15s; font-family: inherit; }
+  .lx-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(14, 122, 104, 0.12); }
+  .lx-field input[readonly] { background: var(--paper-2); color: var(--ink-2); }
+  .lx-field small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .lx-submit { width: 100%; height: 50px; border-radius: 12px; background: var(--ink); color: #fff; font-weight: 600; font-size: 15px; }
+  .lx-submit:hover:not(:disabled) { background: #2a2a28; }
+  .lx-submit:disabled { opacity: .5; cursor: not-allowed; }
+  .lx-note { font-size: 13px; color: var(--muted); line-height: 1.55; }
+  .lx-alert { border-radius: 12px; padding: 12px 14px; font-size: 14px; line-height: 1.5; margin-bottom: 18px; }
+  .lx-alert.err { background: #fbe9e7; color: #8f2a22; }
+  .lx-alert.info { background: #e3f1ec; color: #0a5b4e; }
+  .lx-switch { font-size: 14px; color: var(--ink-2); margin-top: 26px; }
+  .lx-switch a, .lx-link { color: var(--accent-ink); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .lx-auth-side { background: var(--night); color: #e7ede9; padding: 48px; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden; }
+  .lx-auth-side blockquote { font-family: 'Instrument Serif', Georgia, serif; font-size: 34px; line-height: 1.18; margin: 0; max-width: 18ch; color: #fff; }
+  .lx-auth-side ul { list-style: none; padding: 0; margin: 28px 0 0; border-top: 1px solid #2a3531; }
+  .lx-auth-side li { padding: 14px 0; border-bottom: 1px solid #2a3531; display: flex; justify-content: space-between; font-size: 14px; color: #b9c6bf; }
+  .lx-auth-side li b { color: #fff; font-weight: 550; font-family: 'Geist Mono', monospace; font-size: 13px; }
+  .lx-steps-mini { display: flex; gap: 8px; margin-bottom: 22px; max-width: 120px; }
+  .lx-steps-mini i { height: 4px; flex: 1; border-radius: 4px; background: var(--rule); }
+  .lx-steps-mini i.on { background: var(--accent); }
+  @media (max-width: 900px) { .lx-auth { grid-template-columns: 1fr; } .lx-auth-side { display: none; } .lx-auth-form { padding: 22px; } }
+</style>
+
+<template id="tpl-landing">
+  <div class="lx">
+    <header class="lx-nav" id="lx-nav">
+      <div class="lx-wrap lx-nav-in">
+        <a class="lx-mark" href="#top" aria-label="LabPulse home">
+          <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#121212"/><path d="M6 17h5l2.5-7 5 13 2.5-6H26" fill="none" stroke="#7ee2c3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          LabPulse
+        </a>
+        <nav class="lx-links">
+          <a href="#how">How it works</a><a href="#features">Features</a><a href="#roles">Who it's for</a><a href="#security">Security</a>
+        </nav>
+        <div class="lx-nav-cta" data-slot="nav-cta"></div>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="lx-wrap lx-hero">
+        <div>
+          <div class="lx-eyebrow lx-reveal">Intel Unnati IoT Lab · Karunya Institute of Technology and Sciences</div>
+          <h1 class="lx-h1 lx-reveal d1">Know who's in the lab. <em>And prove it.</em></h1>
+          <p class="lx-lead lx-reveal d2">LabPulse replaces the paper register. Students scan a rotating QR, their phone confirms they are really inside, and faculty, staff and the HOD see the lab live: who is working, on which machine, on which project.</p>
+          <div class="lx-cta-row lx-reveal d3" data-slot="hero-cta"></div>
+          <div class="lx-facts lx-reveal d4">
+            <div class="lx-fact"><b>8 s</b><span>Single-use QR</span></div>
+            <div class="lx-fact"><b>20 m</b><span>Geofence</span></div>
+            <div class="lx-fact"><b>0</b><span>Locations kept</span></div>
+            <div class="lx-fact"><b>₹0</b><span>Server cost</span></div>
+          </div>
+        </div>
+        <div class="lx-stage lx-reveal d2" aria-hidden="true">
+          <div class="lx-screen">
+            <div class="lx-screen-top"><span>Intel Unnati IoT Lab · wall screen</span><span class="lx-live"><i></i>ONLINE</span></div>
+            <div class="lx-screen-body">
+              <div class="lx-qr"><svg viewBox="0 0 29 29" shape-rendering="crispEdges" data-slot="qr"></svg></div>
+              <div class="lx-count"><b data-slot="count">23</b><span>verified inside now</span>
+                <div class="lx-ring"><span>New code</span><span class="lx-ring-bar"><i></i></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="lx-phone">
+            <div class="lx-phone-in">
+              <div class="lx-ok"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg></div>
+              <h4>Checked in</h4>
+              <p>Intel Unnati IoT Lab · 10:02</p>
+              <dl><dt>Reason</dt><dd>Extra hours</dd><dt>Machine</dt><dd>Lab PC 1</dd><dt>Project</dt><dd>Smart irrigation</dd><dt>Location</dt><dd>Inside · ±6 m</dd></dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="lx-wrap"><hr class="lx-rule" />
+        <div class="lx-strip"><span class="lx-eyebrow">Running in</span><b>Intel Unnati IoT Lab</b><span>Next: every lab in the Division of CSE</span><span>Built on Google Apps Script and Google Sheets</span></div>
+      </div>
+
+      <section class="lx-sec" id="how">
+        <div class="lx-wrap">
+          <div class="lx-sec-head">
+            <div><div class="lx-eyebrow">How it works</div><h2 class="lx-h2">Ten seconds at the door. <em>No app to install.</em></h2></div>
+            <p>A student only needs the phone camera they already have and their Karunya Google account. Everything else is checked on the server, never trusted from the phone.</p>
+          </div>
+          <div class="lx-steps">
+            <div class="lx-step"><div class="num">01 — Scan</div><h3>Point the camera at the lab screen</h3><p>The code changes every 8 seconds and works exactly once, so a photo shared on WhatsApp is useless by the time it arrives.</p></div>
+            <div class="lx-step"><div class="num">02 — Verify</div><h3>Prove you are inside</h3><p>The phone's location is checked against a 20-metre circle around the lab, then thrown away. Weak indoor GPS goes to a one-tap review instead of a rejection.</p></div>
+            <div class="lx-step"><div class="num">03 — Work</div><h3>Pick the course, machine and project</h3><p>Check out with a line about what you did today. It lands in your project log, and your hours count toward your record.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="features">
+        <div class="lx-wrap">
+          <div class="lx-feature">
+            <div class="lx-feature-copy">
+              <div class="lx-eyebrow">Attendance</div>
+              <h3>Every check-in gets a verdict, not just a tick.</h3>
+              <p>LabPulse grades each check-in from the QR, the distance, the GPS accuracy and how fast the person could have travelled since their last scan.</p>
+              <ul class="lx-list"><li>Fake-GPS apps and impossible travel are rejected and logged</li><li>The live count includes only verified people; pending ones are shown beside it</li><li>Forgot to check out? The visit closes itself and is labelled</li></ul>
+            </div>
+            <div class="lx-panel">
+              <div class="lx-verdict"><span class="lx-tag g">Green</span><span><b>Checked in.</b> Fresh code, inside 20 m, good GPS, normal travel.</span></div>
+              <div class="lx-verdict"><span class="lx-tag a">Amber</span><span><b>Checked in, pending.</b> Weak GPS or a course not in the timetable. Faculty confirm with one tap.</span></div>
+              <div class="lx-verdict"><span class="lx-tag r">Red</span><span><b>Not checked in.</b> Reused code, 500 m away, or a mock location. The reason is shown and recorded.</span></div>
+            </div>
+          </div>
+
+          <div class="lx-feature flip">
+            <div class="lx-feature-copy">
+              <div class="lx-eyebrow">Equipment</div>
+              <h3>3D printers, drones and GPU nodes, without the notebook.</h3>
+              <p>Students reserve a time slot. If it is taken they join a queue and get an email when it frees up. Staff confirm every handover and return in the app.</p>
+              <ul class="lx-list"><li>Only students checked in to the lab can request equipment</li><li>No-shows lose the slot after 15 minutes</li><li>Overdue items trigger reminders to the borrower</li></ul>
+            </div>
+            <div class="lx-panel">
+              <div class="lx-row"><span><b>3D Printer · Prusa MK4</b><small>14:00–16:00 · Print the sensor enclosure</small></span><span class="lx-tag g">Confirmed</span></div>
+              <div class="lx-row"><span><b>3D Printer · Prusa MK4</b><small>15:00–17:00 · Drone arms</small></span><span class="lx-tag a">Queue #1</span></div>
+              <div class="lx-row"><span><b>RTX 4090 Workstation 2</b><small>In use · Training a crop model</small></span><span class="lx-tag g">In use</span></div>
+              <div class="lx-row"><span><b>Raspberry Pi 5 #2</b><small>Due 18:00 today</small></span><span class="lx-tag r">Overdue</span></div>
+            </div>
+          </div>
+
+          <div class="lx-feature">
+            <div class="lx-feature-copy">
+              <div class="lx-eyebrow">Answers</div>
+              <h3>Type a register number. Get the whole story.</h3>
+              <p>Days in the lab, total hours, which machines and which projects. Or pick a machine and see everyone who used it, for how long and why.</p>
+              <ul class="lx-list"><li>Daily digest emailed after the lab closes</li><li>Monthly audit: course hours, GPU utilisation, sensor turnover</li><li>PDF reports and CSV or Excel exports for the ERP</li></ul>
+            </div>
+            <div class="lx-panel">
+              <div class="lx-eyebrow">Lookup · URK24CS1249</div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:18px 0 20px">
+                <div><div class="lx-big">41</div><div class="lx-note">days in the lab</div></div>
+                <div><div class="lx-big">126<span style="font-size:20px">h</span></div><div class="lx-note">verified hours</div></div>
+                <div><div class="lx-big">3</div><div class="lx-note">projects</div></div>
+              </div>
+              <div class="lx-row"><span>Smart Irrigation with ESP32<small>Lab PC 1 · 64 h · completed</small></span><span class="mono" style="font-size:12px">Outcome ↗</span></div>
+              <div class="lx-row"><span>LiDAR SLAM rover<small>RTX 4090 · 48 h · active</small></span><span class="mono" style="font-size:12px">Log ↗</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="lx-sec" id="roles">
+        <div class="lx-wrap">
+          <div class="lx-sec-head">
+            <div><div class="lx-eyebrow">Who it's for</div><h2 class="lx-h2">Six roles. <em>Each sees what they need.</em></h2></div>
+            <p>Permissions are checked on the server for every single action, so hiding a button is never the only protection.</p>
+          </div>
+          <div class="lx-roles">
+            <div class="lx-role"><b>Student</b><span>Check in and out, see your hours, reserve equipment, keep your project log and outcome.</span></div>
+            <div class="lx-role"><b>Faculty</b><span>See your session's roster live: present, pending, missing. Confirm check-ins, mark attendance, export the log.</span></div>
+            <div class="lx-role"><b>Lab staff</b><span>Run the wall screen, hand over and take back equipment, start reserved sessions.</span></div>
+            <div class="lx-role"><b>Coordinator</b><span>Manage the lab's equipment, students and courses, and look anyone or anything up.</span></div>
+            <div class="lx-role"><b>HOD</b><span>A read-only view of every lab, from home: who is in, on what, and the reports.</span></div>
+            <div class="lx-role"><b>Super Admin</b><span>Roles, lab location and radius, opening hours, and the audit log.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="lx-sec lx-night" id="security">
+        <div class="lx-wrap">
+          <div class="lx-sec-head">
+            <div><div class="lx-eyebrow">Security and privacy</div><h2 class="lx-h2">Built so that cheating <em>costs more than showing up.</em></h2></div>
+            <p>LabPulse makes misuse harder, visible and recorded. It is honest about limits too: software cannot stop someone who is physically present.</p>
+          </div>
+          <div class="lx-sec-grid">
+            <div class="lx-sec-item"><div class="mono">01</div><h4>Single-use codes</h4><p>Signed, rotating every 8 s, invalidated the moment they are scanned.</p></div>
+            <div class="lx-sec-item"><div class="mono">02</div><h4>Location, then forgotten</h4><p>Only "inside: yes or no" is stored. Never your coordinates.</p></div>
+            <div class="lx-sec-item"><div class="mono">03</div><h4>Encrypted phone numbers</h4><p>Stored scrambled; only the people who need them can read them.</p></div>
+            <div class="lx-sec-item"><div class="mono">04</div><h4>Karunya accounts only</h4><p>@karunya.edu and @karunya.edu.in. Everyone else is turned away.</p></div>
+            <div class="lx-sec-item"><div class="mono">05</div><h4>An audit trail</h4><p>Role changes, manual entries and rejected scans are recorded and cannot be edited from the app.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="lx-wrap lx-final">
+        <div class="lx-eyebrow">Get started</div>
+        <h2 style="margin-top:16px">Your lab, <em>on one screen.</em></h2>
+        <div class="lx-cta-row" data-slot="final-cta"></div>
+      </section>
+      <div class="lx-wrap">
+        <footer class="lx-foot"><span>LabPulse · Division of Computer Science and Engineering, Karunya Institute of Technology and Sciences</span><span class="mono">Google Apps Script · Google Sheets · Google Workspace</span></footer>
+      </div>
+    </main>
+  </div>
+</template>

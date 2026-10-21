@@ -47,7 +47,7 @@ test('Coordinator adds and removes facilities and students, but cannot touch oth
   const added = c('inventorySave', { lab_id: 'AIIOT', name: 'Prusa MK4 3D Printer', category: 'IOT', type: '3D Printer' });
   assert.ok(added.ok, JSON.stringify(added));
   assert.ok(c('inventoryRemove', { assetId: added.data.asset_id, reason: 'Moved to another lab' }).ok);
-  assert.strictEqual(env.as('staff@karunya.edu')('inventorySave', { lab_id: 'AIIOT', name: 'X', category: 'IOT', type: 'ESP32' }).code, 'FORBIDDEN', 'staff no longer edits the catalog');
+  assert.ok(env.as('staff@karunya.edu')('inventorySave', { lab_id: 'AIIOT', name: 'Spare ESP32', category: 'IOT', type: 'ESP32' }).ok, 'proposal A: lab staff manage the inventory too');
 
   const s = c('manageStudent', { email: 'urk24cs1500@karunya.edu.in', name: 'New Student', reg_no: 'urk24cs1500' });
   assert.ok(s.ok, JSON.stringify(s));
@@ -95,6 +95,11 @@ test('Live view from home shows each person, their system and their project', ()
   assert.strictEqual(inside.find((x) => x.email === 's2@karunya.edu.in').system, 'Own laptop');
   const map = env.as('s3@karunya.edu.in')('labMap', { labId: 'AIIOT' }).data;
   assert.strictEqual(map.cells.find((c) => c.asset_id === 'PC-01').status, 'IN_USE');
+  // Every view agrees: the public catalog shows it in use, and nobody else can request it.
+  assert.strictEqual(env.as('s3@karunya.edu.in')('assetsPublic', { labId: 'AIIOT' }).data.find((a) => a.asset_id === 'PC-01').status, 'IN_USE');
+  scan(env, 's3@karunya.edu.in');
+  checkIn(env, 's3@karunya.edu.in', INSIDE);
+  assert.match(env.as('s3@karunya.edu.in')('requestAsset', { assetId: 'PC-01' }).message, /in use by someone/);
   assert.ok(!env.as('s3@karunya.edu.in')('freeNow', { labId: 'AIIOT' }).data.some((x) => x.type === 'Lab PC (GPU)' && x.count === 2), 'PC-01 is not free');
   const opts = env.as('s3@karunya.edu.in')('checkinOptions', { labId: 'AIIOT' }).data;
   assert.strictEqual(opts.systems.find((x) => x.asset_id === 'PC-01').in_use, true);
@@ -146,8 +151,29 @@ test('Projects: create with a timeline, log work at check-out, submit the outcom
 
 const at = (hhmm) => '2026-10-19T' + hhmm + ':00+05:30';
 
+/** A lab whose admin allows reserving future slots without being checked in (setting off). */
+function advanceBookingWorld() {
+  const env = world();
+  env.session.active = '';
+  env.run("Reports.saveGlobalKey('booking_requires_checkin', false)");
+  return env;
+}
+
+test('Proposal C: by default a reservation needs an active, verified CHECKED_IN status', () => {
+  const env = world();
+  const req = { assetId: '3DP-01', start: at('14:00'), end: at('16:00'), purpose: 'Print the sensor enclosure' };
+  assert.strictEqual(env.as('s1@karunya.edu.in')('bookAsset', req).code, 'NOT_CHECKED_IN');
+  scan(env, 's1@karunya.edu.in');
+  const amber = checkIn(env, 's1@karunya.edu.in', { lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 90 });
+  assert.strictEqual(amber.data.outcome, 'AMBER');
+  assert.strictEqual(env.as('s1@karunya.edu.in')('bookAsset', req).code, 'NOT_CHECKED_IN', 'pending review is not yet CHECKED_IN');
+  env.as('faculty@karunya.edu')('reviewVisit', { visitId: amber.data.visit.visit_id, decision: 'CONFIRM' });
+  assert.strictEqual(env.as('s1@karunya.edu.in')('bookAsset', req).data.status, 'BOOKED');
+  assert.strictEqual(env.as('s1@karunya.edu.in')('bootstrap').data.bookingRequiresCheckin, true);
+});
+
 test('Reserving a slot: first comes first, overlaps join the queue, cancel promotes the next', () => {
-  const env = world(); // Monday 19 Oct, 10:30 IST
+  const env = advanceBookingWorld(); // Monday 19 Oct, 10:30 IST
   const b1 = env.as('s1@karunya.edu.in')('bookAsset', { assetId: '3DP-01', start: at('14:00'), end: at('16:00'), purpose: 'Print the sensor enclosure', projectId: 'P-S1' });
   assert.strictEqual(b1.data.status, 'BOOKED', JSON.stringify(b1));
   const b2 = env.as('s2@karunya.edu.in')('bookAsset', { assetId: '3DP-01', start: at('15:00'), end: at('17:00'), purpose: 'Print drone arms' });
@@ -166,7 +192,7 @@ test('Reserving a slot: first comes first, overlaps join the queue, cancel promo
 });
 
 test('Booking rules: length, opening hours, the future, and who may book', () => {
-  const env = world();
+  const env = advanceBookingWorld();
   const s = env.as('s1@karunya.edu.in');
   assert.match(s('bookAsset', { assetId: 'DRN-01', start: at('11:00'), end: at('17:00'), purpose: 'Long flight test' }).message, /at most 4 hours/);
   assert.match(s('bookAsset', { assetId: 'DRN-01', start: at('19:00'), end: at('21:00'), purpose: 'Night flight' }).message, /opening hours/);
@@ -183,7 +209,7 @@ test('Booking rules: length, opening hours, the future, and who may book', () =>
 });
 
 test('Using a booked slot: staff start it only for a checked-in student, finish frees it for the queue', () => {
-  const env = world();
+  const env = advanceBookingWorld();
   const b = env.as('s2@karunya.edu.in')('bookAsset', { assetId: 'GPU-01', start: at('11:00'), end: at('13:00'), purpose: 'Train the crop model' }).data;
   const w = env.as('s3@karunya.edu.in')('bookAsset', { assetId: 'GPU-01', start: at('12:00'), end: at('14:00'), purpose: 'Train the camera model' }).data;
   assert.strictEqual(w.status, 'WAITLIST');
@@ -211,7 +237,7 @@ test('Using a booked slot: staff start it only for a checked-in student, finish 
 });
 
 test('No-shows lose the slot and the queue moves; expired waitlist entries are closed', () => {
-  const env = world();
+  const env = advanceBookingWorld();
   const b = env.as('s1@karunya.edu.in')('bookAsset', { assetId: 'PC-02', start: at('11:00'), end: at('12:00'), purpose: 'CAD work on PC' }).data;
   const w = env.as('s2@karunya.edu.in')('bookAsset', { assetId: 'PC-02', start: at('11:00'), end: at('12:00'), purpose: 'CAD work too' }).data;
   env.setIst('2026-10-19', '11:20');

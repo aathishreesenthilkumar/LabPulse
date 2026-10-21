@@ -138,11 +138,11 @@ var Attendance = {
     };
   },
 
-  /** asset_id -> true for systems someone is checked in at right now. */
+  /** asset_id -> email of the person checked in at that system right now. */
   systemsInUse: function (labId) {
     var used = {};
     Db.all('ActiveVisits').forEach(function (a) {
-      if (a.lab_id === labId && a.system_id && a.system_id !== OWN_DEVICE) used[a.system_id] = true;
+      if (a.lab_id === labId && a.system_id && a.system_id !== OWN_DEVICE) used[a.system_id] = a.email;
     });
     return used;
   },

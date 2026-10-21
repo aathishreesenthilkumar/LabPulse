@@ -155,13 +155,12 @@ function shim(as, gps) {
   })();` : ''}
   </script>
   <div style="position:fixed;right:8px;bottom:8px;z-index:9999;font:12px system-ui;background:#0f172a;color:#e2e8f0;padding:6px 10px;border-radius:8px;opacity:.85">
-    Preview · ${as} · <a href="/" style="color:#5eead4">switch user</a></div>`;
+    Preview · ${as || 'signed out'} · <a href="/dev" style="color:#5eead4">dev tools</a> · <a href="/logout" style="color:#5eead4">sign out</a></div>`;
 }
 
 function renderApp(file, boot, as, gps) {
   return read(file)
-    .replace(/<\?!= include_\('Styles'\); \?>/, read('Styles.html'))
-    .replace(/<\?!= include_\('Client'\); \?>/, read('Client.html'))
+    .replace(/<\?!= include_\('(\w+)'\); \?>/g, (m, name) => read(name + '.html'))
     .replace(/<\?!= bootJson \?>/, JSON.stringify(boot).replace(/</g, '\\u003c'))
     .replace(/(<body[^>]*>)/, '$1' + shim(as, gps));
 }
@@ -172,7 +171,13 @@ function doGet(as, params) {
   const out = env.ctx.doGet({ parameter: params });
   const boot = out.boot;
   boot.webAppUrl = PUBLIC + '/app';
+  boot.dev = { accounts: PEOPLE };
   return { file: out.file + '.html', boot };
+}
+
+/** What a visitor with no Google identity sees (the real app always has one; the preview may not). */
+function anonymousBoot(view) {
+  return { view: view, webAppUrl: PUBLIC + '/app', dev: { accounts: PEOPLE } };
 }
 
 function landing(c) {
@@ -200,7 +205,7 @@ function landing(c) {
   <p class="text-xs text-slate-500 mt-2">Takes the code currently on the monitor and opens it, exactly as a phone camera would. Use the same code twice (browser back + reload) to see the reuse rejection.</p></section>
 
   <section class="bg-white rounded-xl border p-4"><h2 class="font-semibold mb-3">4 · Open a dashboard as…</h2>
-  <div class="grid sm:grid-cols-2 gap-2">${PEOPLE.map((p) => `<a class="rounded-lg border px-3 py-2 hover:bg-slate-50" href="/as?u=${p[0]}&next=/app"><div class="font-medium">${esc(p[1])}</div><div class="text-xs text-slate-500">${esc(p[2])} · ${esc(p[0])}</div></a>`).join('')}</div></section>
+  <div class="grid sm:grid-cols-2 gap-2">${PEOPLE.map((p) => `<a class="rounded-lg border px-3 py-2 hover:bg-slate-50" href="/as?u=${p[0]}&next=/app%3Fview%3Dapp"><div class="font-medium">${esc(p[1])}</div><div class="text-xs text-slate-500">${esc(p[2])} · ${esc(p[0])}</div></a>`).join('')}</div></section>
 
   <section class="bg-white rounded-xl border p-4"><h2 class="font-semibold mb-2">Outbox (emails the app would send)</h2>
   ${mail.length ? '<ul class="text-sm divide-y">' + mail.map((m) => `<li class="py-2"><b>${esc(m.subject)}</b><div class="text-xs text-slate-500">to ${esc(m.to)}</div></li>`).join('') + '</ul>' : '<p class="text-sm text-slate-500">No emails yet.</p>'}
@@ -231,9 +236,15 @@ const server = http.createServer((req, res) => {
   };
   const redirect = (to, setCookie) => send(302, '', 'text/plain', Object.assign({ Location: to }, setCookie ? { 'Set-Cookie': setCookie } : {}));
   try {
-    if (url.pathname === '/') return send(200, landing(c));
+    if (url.pathname === '/') {
+      // The product's own landing page; signed-in or not.
+      const p = c.as ? doGet(c.as, {}) : { file: 'Index.html', boot: anonymousBoot('landing') };
+      return send(200, renderApp(p.file, p.boot, c.as || '', c.gps || 'inside'));
+    }
+    if (url.pathname === '/dev') return send(200, landing(c));
+    if (url.pathname === '/logout') return redirect('/', 'as=; Path=/; Max-Age=0');
     if (url.pathname === '/as') return redirect(url.searchParams.get('next') || '/app', 'as=' + encodeURIComponent(url.searchParams.get('u')) + '; Path=/');
-    if (url.pathname === '/gps') return redirect('/', 'gps=' + url.searchParams.get('m') + '; Path=/');
+    if (url.pathname === '/gps') return redirect('/dev', 'gps=' + url.searchParams.get('m') + '; Path=/');
     if (url.pathname === '/scan') {
       sync();
       env.session.active = 'staff@karunya.edu';
@@ -261,8 +272,11 @@ const server = http.createServer((req, res) => {
         const claim = env.ctx.Attendance.claim({ email: dev, role: null, user: null, active: false }, url.searchParams.get('t'));
         return send(200, picker(dev, claim));
       }
-      if (!c.as) return redirect('/');
       const params = Object.fromEntries(url.searchParams.entries());
+      if (!c.as) {
+        const view = ['landing', 'login', 'signup'].indexOf(params.view) !== -1 ? params.view : 'login';
+        return send(200, renderApp('Index.html', anonymousBoot(view), '', c.gps || 'inside'));
+      }
       const p = doGet(c.as, params);
       if (params.resume && p.boot.init && p.boot.init.me && p.boot.init.me.registered) {
         const t = env.ctx.Attendance.ticket(c.as);

@@ -20,8 +20,7 @@ function page(file, boot, env, email, opts) {
   opts = opts || {};
   const html = read(file)
     .replace(/<script src="[^"]+"><\/script>/g, '')
-    .replace(/<\?!= include_\('Styles'\); \?>/, read('Styles.html'))
-    .replace(/<\?!= include_\('Client'\); \?>/, read('Client.html'))
+    .replace(/<\?!= include_\('(\w+)'\); \?>/g, (m, name) => read(name + '.html'))
     .replace(/<\?!= bootJson \?>/, JSON.stringify(boot).replace(/</g, '\\u003c'));
   const errors = [];
   const vc = new VirtualConsole();
@@ -111,7 +110,7 @@ async function test(name, fn) {
     scan(env, 's1@karunya.edu.in');
     env.as('s1@karunya.edu.in')('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 80, reason: { type: 'COURSE', sessionId: 'C-23CS2048' } });
     const expectTabs = {
-      's1@karunya.edu.in': ['home', 'projects', 'history'],
+      's1@karunya.edu.in': ['home', 'equipment', 'projects', 'history'],
       'faculty@karunya.edu': ['sessions', 'reviews', 'labprojects', 'reports'],
       'staff@karunya.edu': ['live', 'reviews', 'inventory', 'courses', 'lookup', 'labprojects', 'reports'],
       'admin@karunya.edu': ['live', 'sessions', 'reviews', 'inventory', 'courses', 'lookup', 'labprojects', 'reports', 'settings', 'people', 'audit'],
@@ -141,7 +140,6 @@ async function test(name, fn) {
     const text = p.doc.body.textContent;
     assert.match(text, /Checked in · 0m/);
     assert.match(text, /4 ESP32|5 ESP32/);
-    assert.match(text, /not physical sensors/);
     click(p, '[data-act="request-asset"]');
     await settle();
     const form = p.doc.getElementById('modal-form');
@@ -256,8 +254,47 @@ async function test(name, fn) {
     assertClean(p, 'excel');
   });
 
+  await test('student equipment catalog: availability without borrower details, gated actions', async () => {
+    const env = world();
+    const p = page('Index.html', bootFor(env, 's2@karunya.edu.in'), env, 's2@karunya.edu.in');
+    await settle();
+    click(p, '[role="tab"][data-tab="equipment"]');
+    await settle();
+    const text = p.doc.getElementById('sec-catalog').textContent;
+    assert.match(text, /3D Printer \(Prusa MK4\)/);
+    assert.match(text, /Scan the QR on the lab monitor first/);
+    assert.ok(p.doc.querySelector('[data-act="request-asset"][data-id="3DP-01"]').disabled, 'not checked in: cannot request');
+    assert.ok(p.doc.querySelector('[data-act="booking-new"][data-id="3DP-01"]').disabled, 'not checked in: cannot reserve');
+    click(p, '[data-act="cat-filter"][data-cat="DRONE"]');
+    const cards = p.doc.querySelectorAll('#sec-catalog [data-act="request-asset"]');
+    assert.strictEqual(cards.length, 2, 'filter shows the two drones');
+    assert.ok(!/s1@|Student One/.test(p.doc.getElementById('sec-catalog').textContent), 'no borrower details');
+    assert.match(p.doc.getElementById('sec-map').textContent, /not physical sensors/, 'floor map on the Equipment page');
+    assertClean(p, 'catalog');
+  });
+
+  await test('live dashboard shows the hourly attendance chart with hover values', async () => {
+    const env = world();
+    scan(env, 's1@karunya.edu.in');
+    env.as('s1@karunya.edu.in')('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 8, reason: { type: 'COURSE', sessionId: 'C-23CS2048' } });
+    const p = page('Index.html', bootFor(env, 'staff@karunya.edu'), env, 'staff@karunya.edu');
+    await settle();
+    const svg = p.doc.querySelector('#sec-today svg.lp-chart');
+    assert.ok(svg, 'chart rendered');
+    assert.ok(svg.querySelectorAll('path.bar').length >= 1, 'a column for the current hour');
+    assert.ok([...svg.querySelectorAll('[data-tip]')].some((r) => /10:00–11:00 · 1 present/.test(r.getAttribute('data-tip'))));
+    assert.ok(p.doc.querySelector('.lp-side [data-tab="live"][aria-selected="true"]'), 'sidebar marks the current page');
+    click(p, '[data-act="nav-toggle"]');
+    assert.ok(p.doc.getElementById('shell').classList.contains('nav-open'), 'mobile menu opens');
+    click(p, '[data-act="nav-close"]');
+    assert.ok(!p.doc.getElementById('shell').classList.contains('nav-open'));
+    assertClean(p, 'live chart');
+  });
+
   await test('student reserves a slot; staff see it in today’s reservations', async () => {
     const env = world();
+    scan(env, 's1@karunya.edu.in');
+    env.as('s1@karunya.edu.in')('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 8, reason: { type: 'COURSE', sessionId: 'C-23CS2048' } });
     const p = page('Index.html', bootFor(env, 's1@karunya.edu.in'), env, 's1@karunya.edu.in');
     await settle();
     click(p, '[data-act="booking-new"]');
@@ -276,7 +313,9 @@ async function test(name, fn) {
     assertClean(p, 'reserve');
     const s = page('Index.html', bootFor(env, 'staff@karunya.edu'), env, 'staff@karunya.edu');
     await settle();
-    assert.match(s.doc.getElementById('sec-bookings').textContent, /Student One[\s\S]*not checked in yet/);
+    click(s, '[data-act="live-view"][data-view="desk"]');
+    await settle();
+    assert.match(s.doc.getElementById('sec-bookings').textContent, /Student One[\s\S]*in the lab[\s\S]*Start session/);
     assertClean(s, 'staff bookings');
   });
 
@@ -313,12 +352,55 @@ async function test(name, fn) {
     assert.deepStrictEqual(p.errors, []);
   });
 
+  await test('landing page: visitors see Log in / Sign up, members see Open dashboard', async () => {
+    const env = world();
+    const anon = page('Index.html', { view: 'landing', webAppUrl: 'https://script.google.com/macros/s/TEST/exec' }, env, '');
+    await settle();
+    const t = anon.doc.body.textContent;
+    assert.match(t, /Know who's in the lab\./);
+    assert.match(t, /How it works[\s\S]*Six roles[\s\S]*Security and privacy/);
+    assert.ok(anon.doc.querySelector('[data-slot="nav-cta"] [data-act="go"][data-page="login"]'), 'Log in in the nav');
+    assert.ok(anon.doc.querySelector('[data-slot="hero-cta"] [data-act="go"][data-page="signup"]'), 'Sign up in the hero');
+    assert.strictEqual(anon.doc.querySelectorAll('[data-slot="qr"] rect').length > 200, true, 'hero QR drawn');
+    click(anon, '[data-slot="nav-cta"] [data-page="login"]');
+    assert.match(anon.doc.body.textContent, /Welcome back\.[\s\S]*Continue with Google/);
+    click(anon, '.lx-switch [data-page="signup"]');
+    assert.match(anon.doc.body.textContent, /Create your account\.[\s\S]*Step 1 of 2/);
+    assertClean(anon, 'anonymous landing');
+
+    const member = page('Index.html', bootFor(env, 's1@karunya.edu.in', { view: 'landing' }), env, 's1@karunya.edu.in');
+    await settle();
+    assert.ok(member.doc.querySelector('[data-slot="nav-cta"] [data-page="app"]'), 'Open dashboard for a member');
+    click(member, '[data-slot="nav-cta"] [data-page="app"]');
+    await settle();
+    assert.match(member.doc.body.textContent, /Not checked in/, 'dashboard opens');
+    assertClean(member, 'member landing');
+  });
+
+  await test('log in: shows the Google account; outsiders are told to switch account', async () => {
+    const env = world();
+    const p = page('Index.html', bootFor(env, 'faculty@karunya.edu', { view: 'login' }), env, 'faculty@karunya.edu');
+    await settle();
+    assert.match(p.doc.body.textContent, /Signed in with Google[\s\S]*Dr Faculty[\s\S]*Continue to dashboard/);
+    click(p, '.lx-submit[data-page="app"]');
+    await settle();
+    assert.ok(p.doc.querySelector('.lp-side'), 'dashboard shell after continuing');
+    const out = page('Index.html', { view: 'login', webAppUrl: 'https://x/exec', error: { code: 'DOMAIN', message: 'Only Karunya accounts' } }, env, 'someone@gmail.com');
+    await settle();
+    assert.match(out.doc.body.textContent, /can’t use LabPulse[\s\S]*@karunya\.edu/);
+    assert.match(out.doc.querySelector('.lx-google').getAttribute('href'), /accounts\.google\.com\/AccountChooser/);
+    const reg = page('Index.html', bootFor(env, 's2@karunya.edu.in', { view: 'signup' }), env, 's2@karunya.edu.in');
+    await settle();
+    assert.match(reg.doc.body.textContent, /already have a LabPulse account/);
+    assertClean(p, 'login');
+  });
+
   await test('first sign-in shows registration, then the dashboard', async () => {
     const env = world();
     const email = 'newbie@karunya.edu.in';
     const p = page('Index.html', bootFor(env, email), env, email);
     await settle();
-    assert.match(p.doc.body.textContent, /Welcome to LabPulse/);
+    assert.match(p.doc.body.textContent, /Create your account\.[\s\S]*Step 2 of 2/);
     const f = p.doc.getElementById('reg-form');
     f.querySelector('[name=name]').value = 'New Student';
     f.querySelector('[name=reg_no]').value = 'URK24CS1500';
@@ -335,6 +417,8 @@ async function test(name, fn) {
     env.as('s1@karunya.edu.in')('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: 8, reason: { type: 'COURSE', sessionId: 'C-23CS2048' } });
     env.as('s1@karunya.edu.in')('requestAsset', { assetId: 'GPU-02', hours: 2 });
     const p = page('Index.html', bootFor(env, 'staff@karunya.edu'), env, 'staff@karunya.edu');
+    await settle();
+    click(p, '[data-act="live-view"][data-view="desk"]');
     await settle();
     click(p, '[data-act="issue"]');
     p.doc.getElementById('modal-form').dispatchEvent(new p.win.Event('submit', { cancelable: true }));

@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
+const { createDocsAndDrive, createTriggers } = require('./fake-google');
 
 const SRC = path.join(__dirname, '..', 'src');
 
@@ -78,7 +79,7 @@ function createEnv() {
   const session = { active: '', effective: 'owner@karunya.edu' };
   const mail = [];
   const created = []; // spreadsheets made with SpreadsheetApp.create
-  const drive = { files: [], trashed: [], fetched: [] };
+  const drive = { files: [], trashed: [], fetched: [], copies: [] };
   let lockHeld = false;
 
   const RealDate = Date;
@@ -106,6 +107,8 @@ function createEnv() {
       return { getId: () => f.id, getName: () => f.name, getUrl: () => 'https://drive/' + f.id, addViewer: () => {} };
     }
   };
+  const gdocs = createDocsAndDrive(drive, folder);
+  const trig = createTriggers();
   const ctx = {
     console: { log() {}, warn() {}, error: (...a) => ctx.__errors.push(a.join(' ')) },
     __errors: [],
@@ -149,7 +152,8 @@ function createEnv() {
       newBlob: (data, type, name) => ({ data, type, name, getAs: () => ({ setName() { return this; } }) })
     },
     GmailApp: { sendEmail: (to, subject, body, opts) => mail.push({ to, subject, body, opts }) },
-    ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }), getOAuthToken: () => 'TOKEN' },
+    ScriptApp: Object.assign({ getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }), getOAuthToken: () => 'TOKEN' }, trig.ScriptAppTriggers),
+    DocumentApp: gdocs.DocumentApp,
     UrlFetchApp: {
       fetch: (url, opts) => {
         drive.fetched.push({ url, opts });
@@ -159,7 +163,7 @@ function createEnv() {
     DriveApp: {
       getFolderById: () => folder,
       createFolder: () => folder,
-      getFileById: (id) => ({ setTrashed: () => drive.trashed.push(id) })
+      getFileById: (id) => gdocs.fileFor(id)
     },
     ContentService: {
       MimeType: { JSON: 'application/json' },
@@ -197,6 +201,8 @@ function createEnv() {
     ss,
     created,
     drive,
+    gdocs,
+    triggers: trig.triggers,
     run: (code) => vm.runInContext(code, ctx),
     /** Calls the public api() as `email`, the way google.script.run would. */
     as: (email) => (action, payload) => {
