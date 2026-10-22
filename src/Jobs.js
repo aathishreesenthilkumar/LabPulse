@@ -21,6 +21,7 @@ function jobReconcile() {
 function jobAutoClose() {
   guardJob_();
   var visits = Attendance.autoCloseSweep();
+  visits.left_during_session = Presence.sweep().left;
   visits.bookings = Bookings.sweep();
   visits.missing_emails = Monitoring.missingEmails();
   return visits;

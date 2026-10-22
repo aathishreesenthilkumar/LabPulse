@@ -56,6 +56,7 @@ var STATUS = {
     AUTO_CLOSING: 'AUTO_CLOSING',
     AUTO_SWITCH: 'AUTO_SWITCH',
     STAFF: 'STAFF',
+    LEFT: 'LEFT_DURING_SESSION', // GPS live mode: out of the boundary or unseen for too long
     VOIDED: 'VOIDED'
   },
   ASSET: {

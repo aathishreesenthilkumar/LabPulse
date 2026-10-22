@@ -133,6 +133,7 @@ var Reports = {
           count(function (v) { return v.confidence === 'AMBER'; }) + ' / ' + count(function (v) { return v.confidence === 'MANUAL'; })],
         ['Pending reviews', count(function (v) { return v.review_status === STATUS.REVIEW.PENDING && v.status !== STATUS.VISIT.VOIDED; })],
         ['Auto-closed visits', count(function (v) { return /^AUTO_(DURATION|CLOSING)$/.test(v.close_type); })],
+        ['Left during session', count(function (v) { return v.close_type === STATUS.CLOSE.LEFT; })],
         ['Security events', red],
         ['Items out / pending requests', openLoans.length + ' / ' + pendingReq.length]
       ],

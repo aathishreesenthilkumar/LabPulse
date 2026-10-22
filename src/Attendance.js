@@ -354,6 +354,7 @@ var Attendance = {
         project_id: visit.project_id
       });
       Audit.log(ctx, 'CHECK_IN', visit.visit_id, ev.level, visit.confidence_reason, lab.lab_id);
+      if (Presence.watched(visit)) Presence.start(visit);
       Attendance.refreshOccupancy(lab.lab_id);
       return { outcome: ev.level, reasons: ev.reasons, visit: Attendance.publicVisit(visit) };
     });
@@ -379,6 +380,7 @@ var Attendance = {
       return x.visit_id === visitId;
     });
     if (a) Db.remove('ActiveVisits', a);
+    Cache.remove(Presence.key(visitId));
     var action = closeType === STATUS.CLOSE.MANUAL ? 'CHECK_OUT' : closeType === STATUS.CLOSE.STAFF ? 'STAFF_CHECK_OUT' : 'AUTO_CLOSE';
     if (closeType !== STATUS.CLOSE.VOIDED) Audit.log(ctx, action, visitId, closeType, note || '', v ? v.lab_id : '');
     if (v) Attendance.refreshOccupancy(v.lab_id);

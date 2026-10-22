@@ -41,6 +41,10 @@ var Settings = {
     no_show_minutes: 15, // a confirmed slot not started by then goes to the next in the queue
     max_open_bookings: 3,
     booking_requires_checkin: true, // proposal C: only a CHECKED_IN student may request equipment, including time slots
+    presence_enabled: true, // GPS live mode: the open LabPulse page confirms the student is still inside
+    presence_ping_sec: 60, // how often the phone sends inside/outside
+    presence_not_seen_min: 5, // no ping this long = "Not seen" on Live
+    presence_away_close_min: 15, // out or unseen this long = checked out as "Left during session"
     missing_list_email: true, // email faculty the missing students after each course session
     archive_after_months: 3, // closed rows older than this move to the yearly archive spreadsheet
     backup_keep_days: 14, // daily backups kept; older ones keep one copy per month
@@ -222,7 +226,10 @@ var Settings = {
       no_show_minutes: [5, 120],
       max_open_bookings: [1, 20],
       archive_after_months: [1, 24],
-      backup_keep_days: [3, 90]
+      backup_keep_days: [3, 90],
+      presence_ping_sec: [15, 300],
+      presence_not_seen_min: [2, 60],
+      presence_away_close_min: [5, 180]
     };
     Object.keys(ints).forEach(function (k) {
       var n = Math.round(U.num(next[k], NaN));
@@ -231,6 +238,9 @@ var Settings = {
     });
     next.booking_requires_checkin = next.booking_requires_checkin === true || next.booking_requires_checkin === 'true' || next.booking_requires_checkin === 'on';
     next.missing_list_email = next.missing_list_email === true || next.missing_list_email === 'true' || next.missing_list_email === 'on';
+    next.presence_enabled = next.presence_enabled === true || next.presence_enabled === 'true' || next.presence_enabled === 'on';
+    if (next.presence_not_seen_min * 60 < next.presence_ping_sec * 2) fail_('INVALID', '"Not seen" must allow at least two missed pings.');
+    if (next.presence_away_close_min < next.presence_not_seen_min) fail_('INVALID', 'The check-out limit cannot be shorter than the "Not seen" time.');
     if (next.default_loan_hours > next.max_loan_hours) fail_('INVALID', 'Default loan hours cannot exceed the maximum.');
     ['reports_folder_id', 'template_doc_id', 'backup_folder_id'].forEach(function (k) {
       next[k] = U.str(next[k]);

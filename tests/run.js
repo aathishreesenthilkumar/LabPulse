@@ -367,6 +367,8 @@ test('AT-13 poor GPS accuracy gives Amber and lands in the right review queue', 
 
 test('AT-14 a forgotten check-out auto-closes and is labelled', () => {
   const env = world();
+  // This checks the end-of-session rule on its own; GPS live mode has its own tests.
+  env.run(`Settings.props().setProperty('APP_SETTINGS', JSON.stringify(Object.assign(Settings.global(), { presence_enabled: false })))`);
   scan(env, 's1@karunya.edu.in');
   checkIn(env, 's1@karunya.edu.in', INSIDE); // course ends 12:00, grace 15 min
   scan(env, 's2@karunya.edu.in');

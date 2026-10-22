@@ -47,6 +47,9 @@ env.session.active = '';
 env.run(`
   Db.update('Config', Db.byId('Config', 'AIIOT'), { open_time: '00:00', close_time: '23:59', open_days: 'SUN,MON,TUE,WED,THU,FRI,SAT' });
   Settings.syncFromSheet();
+  Settings.props().setProperty('APP_SETTINGS', JSON.stringify(Object.assign(Settings.global(), {
+    presence_ping_sec: 15, presence_not_seen_min: 2, presence_away_close_min: 5
+  })));
   Db.update('CoursesEvents', Db.byId('CoursesEvents', 'C-DEMO'), { start_time: '00:00', end_time: '23:59' });
   Db.update('CoursesEvents', Db.byId('CoursesEvents', 'EV-HACK'), { start_date: U.dateKey(U.now()), end_date: U.addDays(U.dateKey(U.now()), 2) });
   Db.update('CoursesEvents', Db.byId('CoursesEvents', 'C-23CS2048'), { days: 'SUN,MON,TUE,WED,THU,FRI,SAT', start_time: '00:00', end_time: '23:59' });
@@ -81,9 +84,11 @@ env.run(`
 `);
 const noop = () => chain;
 const chain = new Proxy({}, { get: () => noop });
-env.ctx.DriveApp = {
-  getFileById: (id) => ({ getBlob: () => ({ name: (files[id] || {}).name }) })
-};
+// Keep the full Drive stand-in (folders, backup copies); files made in the preview are served from memory.
+const driveFile = env.ctx.DriveApp.getFileById;
+env.ctx.DriveApp = Object.assign({}, env.ctx.DriveApp, {
+  getFileById: (id) => (files[id] ? { getBlob: () => ({ name: files[id].name }) } : driveFile(id))
+});
 env.ctx.ScriptApp.getProjectTriggers = () => [];
 env.ctx.ScriptApp.newTrigger = () => chain;
 env.ctx.ScriptApp.deleteTrigger = () => {};
@@ -145,17 +150,20 @@ function shim(as, gps) {
     return r;
   } } };
   ${g ? `(function () {
-    var fix = function () { return { coords: { latitude: ${g.lat}, longitude: ${g.lng}, accuracy: ${g.accuracy} }, timestamp: Date.now() }; };
+    var base = { lat: ${g.lat}, lng: ${g.lng}, accuracy: ${g.accuracy} };
+    var fix = function (p) { p = p || base; return { coords: { latitude: p.lat, longitude: p.lng, accuracy: p.accuracy }, timestamp: Date.now() }; };
+    var now = function (ok) {
+      fetch('/gpsnow').then(function (r) { return r.json(); }).then(function (p) { ok(fix(p && p.lat ? p : base)); }, function () { ok(fix()); });
+    };
     var geo = {
-      watchPosition: function (ok) { setTimeout(function () { ok(fix()); }, 600); return 1; },
+      watchPosition: function (ok) { setTimeout(function () { now(ok); }, 600); return 1; },
       clearWatch: function () {},
-      getCurrentPosition: function (ok) { setTimeout(function () { ok(fix()); }, 300); }
+      getCurrentPosition: function (ok) { setTimeout(function () { now(ok); }, 300); }
     };
     try { Object.defineProperty(navigator, 'geolocation', { value: geo, configurable: true }); } catch (e) {}
   })();` : ''}
   </script>
-  <div style="position:fixed;right:8px;bottom:8px;z-index:9999;font:12px system-ui;background:#0f172a;color:#e2e8f0;padding:6px 10px;border-radius:8px;opacity:.85">
-    Preview · ${as || 'signed out'} · <a href="/dev" style="color:#5eead4">dev tools</a> · <a href="/logout" style="color:#5eead4">sign out</a></div>`;
+  <a href="/dev" title="Preview tools: simulated GPS, test accounts, lab monitor" style="position:fixed;right:10px;bottom:10px;z-index:9999;font:600 11px system-ui;background:#121212;color:#7ee2c3;padding:5px 9px;border-radius:99px;opacity:.75;text-decoration:none">Preview · dev tools</a>`;
 }
 
 function renderApp(file, boot, as, gps) {
@@ -242,8 +250,15 @@ const server = http.createServer((req, res) => {
       return send(200, renderApp(p.file, p.boot, c.as || '', c.gps || 'inside'));
     }
     if (url.pathname === '/dev') return send(200, landing(c));
-    if (url.pathname === '/logout') return redirect('/', 'as=; Path=/; Max-Age=0');
+    if (url.pathname === '/logout') {
+      const nextView = url.searchParams.get('next');
+      return redirect(/^(login|signup)$/.test(nextView || '') ? '/app?view=' + nextView : '/app?view=login', 'as=; Path=/; Max-Age=0');
+    }
     if (url.pathname === '/as') return redirect(url.searchParams.get('next') || '/app', 'as=' + encodeURIComponent(url.searchParams.get('u')) + '; Path=/');
+    if (url.pathname === '/gpsnow') {
+      const g = GPS[c.gps || 'inside'];
+      return send(200, JSON.stringify(g && g.lat ? { lat: g.lat, lng: g.lng, accuracy: g.accuracy } : {}), 'application/json');
+    }
     if (url.pathname === '/gps') return redirect('/dev', 'gps=' + url.searchParams.get('m') + '; Path=/');
     if (url.pathname === '/scan') {
       sync();

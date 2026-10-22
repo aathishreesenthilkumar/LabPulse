@@ -5,7 +5,7 @@
  */
 'use strict';
 const assert = require('assert');
-const { INSIDE, world, scan, checkIn, auditActions } = require('./fixtures');
+const { INSIDE, EDGE, HOSTEL, world, scan, checkIn, auditActions } = require('./fixtures');
 
 const results = [];
 function test(name, fn) {
@@ -424,6 +424,99 @@ test('Faculty see who is missing; after the session the faculty is emailed the l
   assert.strictEqual(env.run('jobAutoClose()').missing_emails, 0, 'sent once per session per day');
   r = fac('roster', { sessionId: 'C-23CS2048' }).data;
   assert.strictEqual(r.ended, true);
+});
+
+/* ---------------- GPS live mode: is the person still inside, all session ---------------- */
+
+function liveIn(env, email, reason) {
+  scan(env, email);
+  const r = checkIn(env, email, INSIDE, reason || { type: 'RESEARCH', purpose: 'Thesis experiments', equipment: 'None', projectId: 'P-' + email.slice(0, 2).toUpperCase() });
+  assert.ok(r.ok && r.data.visit, 'check-in: ' + JSON.stringify(r));
+  return r.data.visit.visit_id;
+}
+const ping = (env, email, loc) => env.as(email)('presencePing', { lat: loc.lat, lng: loc.lng, accuracy: loc.accuracy, posAgeMs: 2000 });
+const rowFor = (env, email) => env.as('staff@karunya.edu')('inside', { labId: 'AIIOT' }).data.filter((x) => x.email === email)[0];
+
+test('Live mode: inside pings keep a student In; two outside pings mark them Out; coming back marks them In', () => {
+  const env = world();
+  liveIn(env, 's2@karunya.edu.in');
+  assert.strictEqual(rowFor(env, 's2@karunya.edu.in').presence.state, 'IN', 'starts In at check-in');
+  env.advance(60);
+  assert.strictEqual(ping(env, 's2@karunya.edu.in', INSIDE).data.state, 'IN');
+  env.advance(60);
+  assert.strictEqual(ping(env, 's2@karunya.edu.in', HOSTEL).data.state, 'IN', 'one stray outside reading never flips the state');
+  env.advance(60);
+  assert.strictEqual(ping(env, 's2@karunya.edu.in', HOSTEL).data.state, 'OUT');
+  const row = rowFor(env, 's2@karunya.edu.in');
+  assert.strictEqual(row.presence.state, 'OUT');
+  assert.ok(row.presence.out_since > 0);
+  assert.strictEqual(env.as('staff@karunya.edu')('staffSummary', { labId: 'AIIOT' }).data.presence.out, 1);
+  env.advance(60);
+  assert.strictEqual(ping(env, 's2@karunya.edu.in', INSIDE).data.state, 'IN');
+  const acts = auditActions(env);
+  assert.ok(acts.includes('PRESENCE_OUT') && acts.includes('PRESENCE_BACK'), acts.join(','));
+});
+
+test('Live mode: poor accuracy or the lab edge never marks someone Out', () => {
+  const env = world();
+  liveIn(env, 's2@karunya.edu.in');
+  const fuzzy = { lat: HOSTEL.lat, lng: HOSTEL.lng, accuracy: 300 };
+  for (let i = 0; i < 3; i++) { env.advance(60); assert.notStrictEqual(ping(env, 's2@karunya.edu.in', fuzzy).data.state, 'OUT'); }
+  for (let i = 0; i < 3; i++) { env.advance(60); assert.strictEqual(ping(env, 's2@karunya.edu.in', EDGE).data.state, 'IN', 'edge of the lab within GPS margin'); }
+});
+
+test('Live mode: no ping shows Not seen; out or unseen too long checks out at the last time seen inside', () => {
+  const env = world();
+  const v = liveIn(env, 's2@karunya.edu.in');
+  env.advance(120);
+  ping(env, 's2@karunya.edu.in', INSIDE);
+  const lastInside = env.clock.ms;
+  env.advance(6 * 60);
+  assert.strictEqual(rowFor(env, 's2@karunya.edu.in').presence.state, 'NOT_SEEN');
+  env.session.active = '';
+  assert.strictEqual(env.run('jobAutoClose()').left_during_session, 0, 'not yet past the limit');
+  env.advance(10 * 60);
+  env.session.active = '';
+  assert.strictEqual(env.run('jobAutoClose()').left_during_session, 1);
+  const h = env.as('s2@karunya.edu.in')('myHistory').data[0];
+  assert.strictEqual(h.visit_id, v);
+  assert.strictEqual(h.close_type, 'LEFT_DURING_SESSION');
+  assert.strictEqual(new Date(h.check_out_at).getTime(), lastInside, 'hours stop at the last time seen inside');
+  assert.ok(auditActions(env).includes('LEFT_DURING_SESSION'));
+  assert.strictEqual(ping(env, 's2@karunya.edu.in', INSIDE).data.active, false, 'the page learns it was checked out');
+});
+
+test('Live mode: walking out for good checks out from the moment of the last inside reading', () => {
+  const env = world();
+  liveIn(env, 's2@karunya.edu.in');
+  env.advance(60);
+  ping(env, 's2@karunya.edu.in', INSIDE);
+  const lastInside = env.clock.ms;
+  for (let i = 0; i < 16; i++) { env.advance(60); ping(env, 's2@karunya.edu.in', HOSTEL); }
+  env.session.active = '';
+  assert.strictEqual(env.run('jobAutoClose()').left_during_session, 1);
+  const h = env.as('s2@karunya.edu.in')('myHistory').data[0];
+  assert.strictEqual(h.close_type, 'LEFT_DURING_SESSION');
+  assert.strictEqual(new Date(h.check_out_at).getTime(), lastInside);
+});
+
+test('Live mode: manual entries are not watched; turning the setting off stops it; no coordinates stored', () => {
+  const env = world();
+  const staff = env.as('staff@karunya.edu');
+  assert.ok(staff('manualEntry', { email: 's3@karunya.edu.in', labId: 'AIIOT', reason: { type: 'RESEARCH', purpose: 'Supervised work', equipment: 'None' }, why: 'Location blocked' }).ok);
+  assert.strictEqual(rowFor(env, 's3@karunya.edu.in').presence.state, 'NOT_WATCHED');
+  assert.strictEqual(ping(env, 's3@karunya.edu.in', HOSTEL).data.watched, false);
+  liveIn(env, 's2@karunya.edu.in');
+  ping(env, 's2@karunya.edu.in', HOSTEL);
+  const dump = JSON.stringify(['Visits', 'ActiveVisits', 'AuditLog'].map((t) => env.rows(t)));
+  assert.ok(!dump.includes(String(HOSTEL.lat)) && !dump.includes('10.954'), 'no coordinates in any sheet');
+  const admin = env.as('admin@karunya.edu');
+  assert.ok(admin('saveGlobal', { presence_enabled: false }).ok);
+  env.advance(30 * 60);
+  env.session.active = '';
+  assert.strictEqual(env.run('jobAutoClose()').left_during_session, 0);
+  assert.strictEqual(rowFor(env, 's2@karunya.edu.in').presence.state, 'NOT_WATCHED');
+  assert.ok(!admin('saveGlobal', { presence_ping_sec: 60, presence_not_seen_min: 1 }).ok, 'Not seen must allow two missed pings');
 });
 
 /* ------------------------------------------------------------------ */

@@ -122,6 +122,10 @@ async function test(name, fn) {
       await settle();
       const shown = Array.from(p.doc.querySelectorAll('[data-act="tab"][role="tab"]')).map((b) => b.dataset.tab);
       assert.deepStrictEqual(shown, tabs, email + ' tabs');
+      // Lab staff can open the QR wall screen from the menu; students, faculty and the HOD cannot.
+      const qrLink = p.doc.querySelector('.lp-side [data-monitor-link]');
+      assert.strictEqual(!!qrLink, /^(staff|coord|admin)@/.test(email), email + ' QR screen link');
+      if (qrLink) assert.match(qrLink.getAttribute('href'), /view=monitor&lab=AIIOT/);
       for (const t of tabs) {
         click(p, '[role="tab"][data-tab="' + t + '"]');
         await settle();
@@ -363,7 +367,9 @@ async function test(name, fn) {
     assert.ok(anon.doc.querySelector('[data-slot="hero-cta"] [data-act="go"][data-page="signup"]'), 'Sign up in the hero');
     assert.strictEqual(anon.doc.querySelectorAll('[data-slot="qr"] rect').length > 200, true, 'hero QR drawn');
     click(anon, '[data-slot="nav-cta"] [data-page="login"]');
-    assert.match(anon.doc.body.textContent, /Welcome back\.[\s\S]*Continue with Google/);
+    assert.match(anon.doc.body.textContent, /Log in to LabPulse[\s\S]*Karunya email[\s\S]*Continue/);
+    assert.ok(anon.doc.querySelector('#auth-email [name=email]'), 'email box on the log-in page');
+    assert.ok(!anon.doc.querySelector('.lx-auth-side'), 'no dark side panel');
     click(anon, '.lx-switch [data-page="signup"]');
     assert.match(anon.doc.body.textContent, /Create your account\.[\s\S]*Step 1 of 2/);
     assertClean(anon, 'anonymous landing');
@@ -381,14 +387,15 @@ async function test(name, fn) {
     const env = world();
     const p = page('Index.html', bootFor(env, 'faculty@karunya.edu', { view: 'login' }), env, 'faculty@karunya.edu');
     await settle();
-    assert.match(p.doc.body.textContent, /Signed in with Google[\s\S]*Dr Faculty[\s\S]*Continue to dashboard/);
-    click(p, '.lx-submit[data-page="app"]');
+    // The signed-in Google email is filled in; Continue goes straight to the dashboard.
+    assert.strictEqual(p.doc.querySelector('#auth-email [name=email]').value, 'faculty@karunya.edu');
+    p.doc.getElementById('auth-email').dispatchEvent(new p.win.Event('submit', { bubbles: true, cancelable: true }));
     await settle();
     assert.ok(p.doc.querySelector('.lp-side'), 'dashboard shell after continuing');
     const out = page('Index.html', { view: 'login', webAppUrl: 'https://x/exec', error: { code: 'DOMAIN', message: 'Only Karunya accounts' } }, env, 'someone@gmail.com');
     await settle();
     assert.match(out.doc.body.textContent, /can’t use LabPulse[\s\S]*@karunya\.edu/);
-    assert.match(out.doc.querySelector('.lx-google').getAttribute('href'), /accounts\.google\.com\/AccountChooser/);
+    assert.ok(out.doc.querySelector('#auth-email [name=email]'), 'outsider can type a different email');
     const reg = page('Index.html', bootFor(env, 's2@karunya.edu.in', { view: 'signup' }), env, 's2@karunya.edu.in');
     await settle();
     assert.match(reg.doc.body.textContent, /already have a LabPulse account/);

@@ -43,7 +43,8 @@ var Monitoring = {
       }).length,
       pending_reviews: Db.find('Visits', function (v) {
         return v.lab_id === labId && v.review_status === STATUS.REVIEW.PENDING && v.status !== STATUS.VISIT.VOIDED;
-      }).length
+      }).length,
+      presence: Presence.counts(labId)
     };
   },
 
@@ -76,7 +77,8 @@ var Monitoring = {
         duration_ms: now - a.check_in_at, confidence: v.confidence, review_status: v.review_status,
         system_id: a.system_id, system: Monitoring.systemLabel(a.system_id, assets),
         project_id: a.project_id, project: a.project_id && projects[a.project_id] ? projects[a.project_id].title : '',
-        purpose: v.purpose || ''
+        purpose: v.purpose || '',
+        presence: Presence.view(v, now.getTime())
       };
     }).sort(function (a, b) { return b.check_in_at - a.check_in_at; });
   },

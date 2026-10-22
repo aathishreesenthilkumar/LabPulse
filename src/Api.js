@@ -28,6 +28,7 @@ var ROUTES = {
   occupancy: { roles: ANY_, fn: function (ctx, p) { var id = Settings.lab(p.labId).lab_id; return { labId: id, occupancy: Attendance.occupancy(id), pending: Attendance.pending(id) }; } },
   checkinOptions: { roles: ANY_, fn: function (ctx, p) { return Attendance.options(p.labId, ctx); } },
   checkIn: { roles: ANY_, fn: function (ctx, p) { return Attendance.checkIn(ctx, p); } },
+  presencePing: { roles: ANY_, fn: function (ctx, p) { return Presence.ping(ctx, p); } },
   checkOut: { roles: ANY_, fn: function (ctx, p) { return Attendance.checkOut(ctx, p); } },
   freeNow: { roles: ANY_, fn: function (ctx, p) { return Assets.freeNow(Settings.lab(p.labId).lab_id); } },
   assetsPublic: { roles: ANY_, fn: function (ctx, p) { return Assets.publicList(Settings.lab(p.labId).lab_id); } },
@@ -159,6 +160,10 @@ var Api = {
       defaultLoanHours: g.default_loan_hours,
       maxBookingHours: g.max_booking_hours,
       bookingRequiresCheckin: g.booking_requires_checkin,
+      presenceEnabled: g.presence_enabled,
+      presencePingSec: g.presence_ping_sec,
+      presenceNotSeenMin: g.presence_not_seen_min,
+      presenceAwayMin: g.presence_away_close_min,
       maxLoanHours: g.max_loan_hours,
       version: APP.VERSION
     };

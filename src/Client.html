@@ -92,7 +92,7 @@
       return badge(m[0], m[1]);
     }
     function closeLabel(t) {
-      return { MANUAL: 'Checked out', AUTO_DURATION: 'Auto-closed (session ended)', AUTO_CLOSING: 'Auto-closed (lab closed)', AUTO_SWITCH: 'Closed (moved to another lab)', STAFF: 'Closed by staff', VOIDED: 'Voided' }[t] || '';
+      return { MANUAL: 'Checked out', AUTO_DURATION: 'Auto-closed (session ended)', AUTO_CLOSING: 'Auto-closed (lab closed)', AUTO_SWITCH: 'Closed (moved to another lab)', STAFF: 'Closed by staff', LEFT_DURING_SESSION: 'Left during session', VOIDED: 'Voided' }[t] || '';
     }
     function entryLabel(t) { return { COURSE: 'Lab course', EVENT: 'Event / workshop', RESEARCH: 'Individual research' }[t] || t; }
 
@@ -113,6 +113,7 @@
       sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
       shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
       clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+      logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
       qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM17 17h4v4h-4z"/>',
       menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
       alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
@@ -323,6 +324,13 @@
       { id: 'people', label: 'People', icon: 'users', group: 'Admin', sub: 'Accounts, roles and permissions', show: function () { return can('users'); }, view: viewPeople },
       { id: 'audit', label: 'Audit', icon: 'shield', group: 'Admin', sub: 'Append-only log of sensitive actions', show: function () { return can('audit'); }, view: viewAudit }
     ];
+    /** The lab's wall-screen QR page. In the preview it stays on this host so the sign-in cookie is kept. */
+    function monitorUrl(labId) {
+      return (BOOT.dev ? '/app' : BOOT.webAppUrl) + '?view=monitor&lab=' + encodeURIComponent(labId || '');
+    }
+    function monitorLink(cls, label) {
+      return '<a class="' + cls + '" href="' + esc(monitorUrl(S.lab)) + '" target="_blank" rel="noopener" data-monitor-link>' + icon('qr') + '<span>' + label + '</span></a>';
+    }
     function visibleTabs() { return TABS.filter(function (t) { return t.show(); }); }
 
     function sidebar() {
@@ -333,7 +341,8 @@
         var head = t.group !== group ? '<div class="lp-nav-group">' + esc(t.group) + '</div>' : '';
         group = t.group;
         return head + '<button class="lp-nav-item" role="tab" aria-selected="' + (t.id === S.tab) + '" data-act="tab" data-tab="' + t.id + '">' +
-          icon(t.icon) + '<span>' + esc(t.label) + '</span></button>';
+          icon(t.icon) + '<span>' + esc(t.label) + '</span></button>' +
+          (t.id === 'live' && can('monitorTick') ? monitorLink('lp-nav-item', 'QR screen ↗') : '');
       }).join('');
       return '<aside class="lp-side" aria-label="Main navigation">' +
         '<div class="lp-side-brand"><div class="lp-logo">' + icon('pulse', 'w-5 h-5') + '</div><div><div class="font-bold text-white leading-tight tracking-tight">LabPulse</div>' +
@@ -346,7 +355,8 @@
         '<nav class="lp-side-nav" role="tablist">' + nav + '</nav>' +
         '<div class="lp-side-foot"><div class="lp-avatar">' + esc(initials(me.name || me.email)) + '</div><div class="min-w-0">' +
         '<div class="text-sm font-semibold text-white truncate">' + esc(me.name || me.email) + '</div>' +
-        '<div class="text-xs text-slate-400 truncate">' + esc(ROLE_NAMES[me.role] || '') + (me.reg_no ? ' · ' + esc(me.reg_no) : '') + '</div></div></div></aside>';
+        '<div class="text-xs text-slate-400 truncate">' + esc(ROLE_NAMES[me.role] || '') + (me.reg_no ? ' · ' + esc(me.reg_no) : '') + '</div></div>' +
+        '<a class="lp-signout" href="' + esc(signOutUrl()) + '" target="_top" title="Sign out" aria-label="Sign out">' + icon('logout', 'w-4 h-4') + '<span>Sign out</span></a></div></aside>';
     }
 
     function topbar(tab) {
@@ -413,6 +423,12 @@
     }
 
     /** Navigate between pages without a reload; keeps the address bar in step where possible. */
+    /** Signing out of a Google-identity app means signing out of Google, then choosing an account again. */
+    function signOutUrl() {
+      if (BOOT.dev) return '/logout';
+      return 'https://accounts.google.com/Logout?continue=' + encodeURIComponent(switchAccountUrl('login'));
+    }
+
     function goPage(page) {
       S.page = page;
       try {
@@ -423,8 +439,8 @@
       window.scrollTo(0, 0);
     }
 
-    function switchAccountUrl(back) {
-      return 'https://accounts.google.com/AccountChooser?continue=' + encodeURIComponent(BOOT.webAppUrl + '?view=' + (back || 'login'));
+    function switchAccountUrl(back, email) {
+      return 'https://accounts.google.com/AccountChooser?' + (email ? 'Email=' + encodeURIComponent(email) + '&' : '') + 'continue=' + encodeURIComponent(BOOT.webAppUrl + '?view=' + (back || 'login'));
     }
 
     var GOOGLE_G = '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 7l7.3 5.7c4.3-4 7-9.9 7-17.2z"/><path fill="#FBBC05" d="M10.6 28.6A14.4 14.4 0 0 1 9.5 24c0-1.6.3-3.2.8-4.6l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.3-5.7c-2 1.4-4.7 2.3-8.6 2.3-6.2 0-11.5-4.1-13.4-9.9l-8 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
@@ -468,30 +484,53 @@
       if (S.occ !== null && S.occ !== undefined) app.querySelector('[data-slot="count"]').textContent = S.occ;
     }
 
-    function authShell(inner, side) {
+    function authShell(inner) {
       return '<div class="lx"><div class="lx-auth">' +
-        '<div class="lx-auth-form"><div class="flex items-center justify-between"><button class="lx-mark" data-act="go" data-page="landing" aria-label="LabPulse home">' +
+        '<header class="lx-auth-top"><button class="lx-mark" data-act="go" data-page="landing" aria-label="LabPulse home">' +
         '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#121212"/><path d="M6 17h5l2.5-7 5 13 2.5-6H26" fill="none" stroke="#7ee2c3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>LabPulse</button>' +
-        '<button class="lx-btn lx-btn-text" data-act="go" data-page="landing">← Back to site</button></div>' +
-        '<div class="lx-auth-box">' + inner + '</div></div>' +
-        '<aside class="lx-auth-side"><div class="lx-eyebrow">Intel Unnati IoT Lab · Karunya</div>' + side + '</aside></div></div>';
+        '<button class="lx-btn lx-btn-text" data-act="go" data-page="landing">← Back to site</button></header>' +
+        '<main class="lx-auth-box">' + inner + '</main>' +
+        '<p class="lx-auth-foot">Only @karunya.edu and @karunya.edu.in accounts · Intel Unnati IoT Lab, Karunya</p></div></div>';
     }
 
-    function authSide(quote) {
-      return '<div><blockquote>' + quote + '</blockquote><ul>' +
-        '<li>QR code rotation <b>every 8 s</b></li><li>Geofence radius <b>20 m</b></li><li>Coordinates stored <b>none</b></li><li>Phone numbers <b>encrypted</b></li></ul></div>' +
-        '<div class="lx-note" style="color:#8fa197">Access is limited to @karunya.edu and @karunya.edu.in Google accounts.</div>';
-    }
-
-    /** Preview only: there is no Google sign-in on a laptop, so a test account is chosen instead. */
-    function devAccounts(next) {
+    /**
+     * The usual sign-in pattern: type your email, press Continue.
+     * Deployed: Google confirms it is you (and asks for a password only if needed).
+     * Preview: there is no Google sign-in on a laptop, so the email signs in directly; test accounts are in a dropdown.
+     */
+    function emailStep(prefill) {
       var list = (BOOT.dev && BOOT.dev.accounts) || [];
-      if (!list.length) return '';
-      return '<div class="lx-alert info"><b>Preview mode.</b> The deployed app uses your Google account. Here, pick a test account:</div>' +
-        '<div style="display:grid;gap:8px">' + list.map(function (a) {
-          return '<a class="lx-account" href="/as?u=' + encodeURIComponent(a[0]) + '&next=' + encodeURIComponent('/app?view=' + next) + '"><span class="lx-avatar">' + esc(initials(a[1])) + '</span>' +
-            '<span style="min-width:0"><b style="display:block;font-size:14px">' + esc(a[1]) + '</b><span class="lx-note">' + esc(a[2]) + '</span></span></a>';
-        }).join('') + '</div>';
+      var pick = list.length ? '<label class="lx-field"><span>Or pick a test account <em class="lx-tag">Preview</em></span>' +
+        '<select id="dev-pick"><option value="">Choose an account…</option>' + list.map(function (a) {
+          return '<option value="' + esc(a[0]) + '"' + (a[0] === prefill ? ' selected' : '') + '>' + esc(a[1] + ' — ' + a[2]) + '</option>';
+        }).join('') + '</select><small>Fills in the email above. The deployed app uses your Google sign-in instead.</small></label>' : '';
+      return '<form id="auth-email" novalidate>' +
+        '<label class="lx-field"><span>Karunya email</span><input name="email" type="email" required autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="urk24cs1249@karunya.edu.in" value="' + esc(prefill || '') + '"></label>' +
+        pick +
+        '<div id="auth-error" class="lx-alert err" style="display:none"></div>' +
+        '<button class="lx-submit" id="auth-btn">Continue</button>' +
+        (BOOT.dev ? '' : '<p class="lx-note" style="margin-top:12px;text-align:center">You’ll confirm with your Karunya Google account. LabPulse never sees your password.</p>') +
+        '</form>';
+    }
+    function domainError(e) {
+      return e && e.code === 'DOMAIN' ? '<div class="lx-alert err"><b>This account can’t use LabPulse.</b> Only @karunya.edu and @karunya.edu.in accounts are allowed.</div>'
+        : e && e.message && e.code !== 'NO_IDENTITY' ? '<div class="lx-alert err">' + esc(e.message) + '</div>' : '';
+    }
+    function submitEmail(f) {
+      var email = String(f.querySelector('[name=email]').value || '').trim().toLowerCase();
+      var err = document.getElementById('auth-error');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        err.textContent = 'Enter your full email address, e.g. urk24cs1249@karunya.edu.in';
+        err.style.display = 'block';
+        return;
+      }
+      var btn = document.getElementById('auth-btn');
+      btn.disabled = true;
+      btn.textContent = 'Continuing…';
+      var id = identity();
+      if (id.known && id.me.email.toLowerCase() === email) return goPage(id.registered ? 'app' : 'signup');
+      if (BOOT.dev) { location.href = '/as?u=' + encodeURIComponent(email) + '&next=' + encodeURIComponent('/app?view=app'); return; }
+      window.top.location.href = switchAccountUrl('app', email);
     }
 
     function accountCard(me, sub) {
@@ -502,26 +541,10 @@
 
     function renderLogin() {
       var id = identity();
-      var body;
-      if (id.known) {
-        var me = id.me;
-        body = '<p class="lx-eyebrow" style="margin-bottom:10px">Signed in with Google</p>' + accountCard(me, me.registered ? me.email + ' · ' + (ROLE_NAMES[me.role] || '') : me.email) +
-          '<button class="lx-submit" style="margin-top:16px" data-act="go" data-page="' + (me.registered ? 'app' : 'signup') + '">' + (me.registered ? 'Continue to dashboard' : 'Continue and finish sign-up') + '</button>' +
-          (me.registered ? '' : '<p class="lx-note" style="margin-top:12px">This Google account has no LabPulse profile yet. It takes 30 seconds.</p>') +
-          '<p class="lx-switch">Not you? <a class="lx-link" href="' + esc(switchAccountUrl('login')) + '" target="_top">Use a different Google account</a></p>' +
-          (BOOT.dev ? '<div style="margin-top:22px">' + devAccounts('login') + '</div>' : '');
-      } else {
-        var e = id.error;
-        body = (e && e.code === 'DOMAIN' ? '<div class="lx-alert err"><b>This Google account can’t use LabPulse.</b> Only @karunya.edu and @karunya.edu.in accounts are allowed. Switch to your Karunya account.</div>'
-          : e && e.message && e.code !== 'NO_IDENTITY' ? '<div class="lx-alert err">' + esc(e.message) + '</div>' : '') +
-          (BOOT.dev ? devAccounts('login')
-            : '<a class="lx-google" href="' + esc(switchAccountUrl('login')) + '" target="_top">' + GOOGLE_G + 'Continue with Google</a>' +
-              '<p class="lx-note" style="margin-top:14px">Use your Karunya Google account. LabPulse never sees your Google password.</p>');
-      }
       document.getElementById('app').innerHTML = authShell(
-        '<h1>Welcome <em>back.</em></h1><p class="sub">Log in with your Karunya Google account to check in, reserve equipment and see your lab time.</p>' + body +
-        '<p class="lx-switch">New to LabPulse? <a class="lx-link" data-act="go" data-page="signup">Create an account</a></p>',
-        authSide('“The register now fills itself in, and nobody can sign in for a friend.”'));
+        '<h1>Log in to <em>LabPulse</em></h1><p class="sub">Check in, reserve equipment and see your lab time.</p>' +
+        (id.known ? '' : domainError(id.error)) + emailStep(id.known ? id.me.email : '') +
+        '<p class="lx-switch">New to LabPulse? <a class="lx-link" data-act="go" data-page="signup">Create an account</a></p>');
     }
 
     function renderSignup() {
@@ -533,9 +556,7 @@
       var body;
       if (!id.known) {
         var e = id.error;
-        body = '<p class="sub">Step 1 of 2 · Choose your Karunya Google account. LabPulse uses it to know it is really you.</p>' +
-          (e && e.code === 'DOMAIN' ? '<div class="lx-alert err"><b>That account isn’t a Karunya account.</b> Sign up with @karunya.edu or @karunya.edu.in.</div>' : '') +
-          (BOOT.dev ? devAccounts('signup') : '<a class="lx-google" href="' + esc(switchAccountUrl('signup')) + '" target="_top">' + GOOGLE_G + 'Continue with Google</a>');
+        body = '<p class="sub">Step 1 of 2 · Enter your Karunya email.</p>' + domainError(e) + emailStep('');
       } else if (id.registered) {
         body = '<p class="sub">You already have a LabPulse account.</p>' + accountCard(id.me, id.me.email + ' · ' + (ROLE_NAMES[id.me.role] || '')) +
           '<button class="lx-submit" style="margin-top:16px" data-act="go" data-page="app">Go to dashboard</button>';
@@ -544,7 +565,7 @@
         body = '<p class="sub">Step 2 of 2 · A one-time profile so faculty and lab staff know who you are.' +
           (BOOT.claim && BOOT.claim.ok ? ' Your QR scan is held for a few minutes while you finish.' : '') + '</p>' +
           '<form id="reg-form" novalidate>' +
-          '<label class="lx-field"><span>Karunya email</span><input value="' + esc(me.email) + '" readonly><small>From your Google account. <a class="lx-link" href="' + esc(switchAccountUrl('signup')) + '" target="_top">Use a different account</a></small></label>' +
+          '<label class="lx-field"><span>Karunya email</span><input value="' + esc(me.email) + '" readonly><small>Not you? <a class="lx-link" ' + (BOOT.dev ? 'href="/logout?next=signup"' : 'href="' + esc(switchAccountUrl('signup')) + '" target="_top"') + '>Use a different email</a></small></label>' +
           '<label class="lx-field"><span>Full name</span><input name="name" value="' + esc(me.name || '') + '" required autocomplete="name" placeholder="As on your ID card"></label>' +
           '<label class="lx-field"><span>Register number / employee ID</span><input name="reg_no" value="' + esc(me.reg_no || '') + '" required placeholder="URK24CS1249" autocapitalize="characters"><small>Students: your register number. Staff and faculty: your employee ID.</small></label>' +
           '<label class="lx-field"><span>Mobile number</span><input name="mobile" required inputmode="tel" placeholder="98765 43210" autocomplete="tel"><small>Stored encrypted. Only lab staff and administrators can see it; it never appears in exports.</small></label>' +
@@ -552,8 +573,7 @@
           '<button class="lx-submit" id="reg-btn">Create account</button></form>';
       }
       document.getElementById('app').innerHTML = authShell(head + body +
-        '<p class="lx-switch">Already have an account? <a class="lx-link" data-act="go" data-page="login">Log in</a></p>',
-        authSide('“Students check in in ten seconds. The HOD sees the lab from home.”'));
+        '<p class="lx-switch">Already have an account? <a class="lx-link" data-act="go" data-page="login">Log in</a></p>');
       var form = document.getElementById('reg-form');
       if (!form) return;
       form.addEventListener('submit', function (ev) {
@@ -894,6 +914,7 @@
       var changed = !S.status || !!S.status.checkedIn !== !!st.checkedIn;
       S.status = st;
       if (changed) setTimeout(function () { paintSection('free'); }, 0);
+      setTimeout(ensurePresence, 0);
       var hero = function (bg, iconName, inner, action) {
         return '<section class="rounded-2xl p-5 sm:p-6 text-white shadow-sm" style="background:' + bg + '">' +
           '<div class="flex items-start gap-4 flex-wrap"><div class="w-12 h-12 rounded-2xl bg-white/15 grid place-items-center flex-none">' + icon(iconName, 'w-6 h-6') + '</div>' +
@@ -907,7 +928,8 @@
           '<div class="text-2xl font-bold tracking-tight mt-0.5">Checked in · ' + dur(v.duration_ms) + '</div>' +
           '<div class="text-white/85 mt-1 text-sm">' + esc(v.label) + '</div>' +
           '<div class="text-xs text-white/70 mt-2">Since ' + fmtTime(v.check_in_at) + (v.expected_end_at ? ' · closes automatically at ' + fmtTime(v.expected_end_at) + ' if you forget' : '') + '</div>' +
-          (pending ? '<div class="text-xs mt-2 rounded-lg bg-white/15 px-2.5 py-1.5 inline-block">Waiting for a one-tap review. You’ll count in the live total once confirmed.</div>' : ''),
+          (pending ? '<div class="text-xs mt-2 rounded-lg bg-white/15 px-2.5 py-1.5 inline-block">Waiting for a one-tap review. You’ll count in the live total once confirmed.</div>' : '') +
+          '<div id="presence-line">' + presenceLine() + '</div>',
           '<button class="lp-btn bg-white text-teal-900 hover:bg-teal-50" data-act="checkout">Check out</button>');
       }
       if (st.ticket) {
@@ -919,6 +941,79 @@
         '<div class="text-2xl font-bold tracking-tight">Not checked in</div><div class="text-white/80 text-sm mt-1">Scan the QR on the lab monitor with your phone camera to check in.</div>',
         '<button class="lp-btn bg-white text-slate-900 hover:bg-slate-100" data-act="scan-help">' + icon('qr') + 'How to scan</button>');
     }
+
+    /* ---------- GPS live mode: while checked in, the open page confirms the student is still inside ---------- */
+
+    var LIVE = { timer: null, visitId: null, last: null, lastAt: 0, err: '', lock: null, busy: false };
+    function presenceWanted() {
+      var st = S.status;
+      return !!(S.init && S.init.presenceEnabled && st && st.checkedIn && st.visit && st.visit.confidence !== 'MANUAL');
+    }
+    function ensurePresence() {
+      if (!presenceWanted()) return stopPresence();
+      if (LIVE.timer && LIVE.visitId === S.status.visit.visit_id) return;
+      stopPresence();
+      LIVE.visitId = S.status.visit.visit_id;
+      LIVE.timer = setInterval(sendPresence, Math.max(15, S.init.presencePingSec || 60) * 1000);
+      setTimeout(sendPresence, 1500);
+      keepAwake();
+    }
+    function stopPresence() {
+      if (LIVE.timer) clearInterval(LIVE.timer);
+      LIVE.timer = null;
+      LIVE.visitId = null;
+      LIVE.last = null;
+      if (LIVE.lock) { try { LIVE.lock.release(); } catch (e) {} LIVE.lock = null; }
+    }
+    /** Keeps the screen on so the browser keeps sending location (a locked phone stops every web page). */
+    function keepAwake() {
+      try {
+        if (!LIVE.lock && !document.hidden && navigator.wakeLock) {
+          navigator.wakeLock.request('screen').then(function (l) {
+            LIVE.lock = l;
+            l.addEventListener('release', function () { LIVE.lock = null; });
+          }, function () {});
+        }
+      } catch (e) { /* not supported: pings still run while the page is in front */ }
+    }
+    function sendPresence() {
+      if (!LIVE.timer || document.hidden || LIVE.busy) return;
+      if (!navigator.geolocation) { LIVE.err = 'This browser cannot share location.'; return paintPresence(); }
+      LIVE.busy = true;
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        call('presencePing', { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy, posAgeMs: Date.now() - pos.timestamp }).then(function (r) {
+          LIVE.busy = false;
+          if (!r.active) { stopPresence(); reloadVisible(); return; } // checked out (by you, staff or the rules)
+          LIVE.last = r;
+          LIVE.lastAt = Date.now();
+          LIVE.err = '';
+          paintPresence();
+        }, function () { LIVE.busy = false; });
+      }, function (e) {
+        LIVE.busy = false;
+        LIVE.err = e && e.code === 1 ? 'Location is blocked. Allow it for this site, or you will show as “Not seen”.' : 'Could not read your location. Move near a window if this keeps happening.';
+        paintPresence();
+      }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
+    }
+    function presenceLine() {
+      if (!presenceWanted()) return '';
+      var g = S.init;
+      var r = LIVE.last;
+      var state = LIVE.err ? '<span class="text-amber-200">' + esc(LIVE.err) + '</span>'
+        : !r ? 'Starting live presence…'
+        : r.state === 'OUT' ? '<b class="text-red-200">You appear to be outside the lab.</b> Go back in, or check out.'
+        : r.reading === 'WEAK' ? 'Live presence on · weak GPS, holding your last position · ' + fmtTime(LIVE.lastAt)
+        : 'Live presence on · inside the lab · ' + fmtTime(LIVE.lastAt);
+      return '<div class="mt-3 text-xs text-white/80 flex items-start gap-2"><span class="lp-live-dot' + (r && r.state === 'OUT' ? ' out' : '') + '"></span><span>' + state +
+        '<br><span class="text-white/60">Keep LabPulse open during your session. Closed for ' + g.presenceNotSeenMin + ' min shows you as “Not seen”; ' + g.presenceAwayMin + ' min out or unseen checks you out.</span></span></div>';
+    }
+    function paintPresence() {
+      var el = document.getElementById('presence-line');
+      if (el) el.innerHTML = presenceLine();
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && LIVE.timer) { keepAwake(); sendPresence(); }
+    });
 
     function htmlFree(list) {
       var inLab = S.status && S.status.checkedIn && S.status.visit.review_status !== 'PENDING';
@@ -1204,19 +1299,27 @@
     /* ================= lab staff (FR-26, FR-22) ================= */
 
     /** Live page: one stats strip, then one focused sub-view at a time instead of every panel at once. */
+    function presenceSub(s) {
+      var pr = s.presence || {};
+      var bits = [];
+      if (pr.out) bits.push('<span class="text-red-700">' + pr.out + ' out</span>');
+      if (pr.not_seen) bits.push(pr.not_seen + ' not seen');
+      if (s.pending_inside) bits.push('<span class="text-amber-700">+' + s.pending_inside + ' awaiting review</span>');
+      return bits.length ? bits.join(' · ') : 'All confirmed inside';
+    }
     var LIVE_VIEWS = [['overview', 'Overview'], ['desk', 'Equipment desk'], ['activity', 'Activity'], ['map', 'Floor map']];
     function viewLive() {
       var v = S.liveView || 'overview';
       var views = LIVE_VIEWS.filter(function (x) { return x[0] !== 'desk' || can('handshake') || can('bookingsToday'); });
       var seg = '<div class="lp-seg" role="tablist">' + views.map(function (x) {
         return '<button aria-pressed="' + (x[0] === v) + '" data-act="live-view" data-view="' + x[0] + '">' + x[1] + '</button>';
-      }).join('') + '</div>';
+      }).join('') + (can('monitorTick') ? '<span style="margin-left:auto;align-self:center">' + monitorLink('lp-btn lp-btn-primary lp-btn-sm', 'Open QR screen') + '</span>' : '') + '</div>';
       var strip = section('strip', { live: true, height: 96, load: function () { return call('staffSummary', { labId: S.lab }); }, html: function (s) {
         S.occ = s.occupancy;
         S.occPending = s.pending_inside;
         paintOcc();
         return '<div class="lp-band" style="--cols:5">' +
-          statTile('Inside now', esc(s.occupancy), { sub: s.pending_inside ? '<span class="text-amber-700">+' + s.pending_inside + ' awaiting review</span>' : 'Verified check-ins' }) +
+          statTile('Inside now', esc(s.occupancy), { sub: presenceSub(s) }) +
           statTile('Items out', esc(s.items_out), { sub: 'On loan now' }) +
           statTile('Overdue', '<span' + (s.overdue ? ' class="text-red-700"' : '') + '>' + esc(s.overdue) + '</span>', { sub: s.overdue ? 'Reminders sent' : 'Nothing late' }) +
           statTile('Pending requests', esc(s.pending_requests), { sub: 'Waiting for handover' }) +
@@ -1243,16 +1346,24 @@
       return strip + seg + body;
     }
 
+    function presenceBadge(p) {
+      if (!p || p.state === 'NOT_WATCHED') return '<span class="text-xs text-slate-400">—</span>';
+      if (p.state === 'IN') return badge('green', 'In') + '<div class="text-xs text-slate-500 mt-1">seen ' + fmtTime(p.last_seen) + '</div>';
+      if (p.state === 'OUT') return badge('red', 'Out') + '<div class="text-xs text-red-700 mt-1">left ' + fmtTime(p.out_since) + '</div>';
+      return badge('gray', 'Not seen') + '<div class="text-xs text-slate-500 mt-1">since ' + fmtTime(p.last_seen) + '</div>';
+    }
+
     function htmlInside(list) {
       var rows = list.map(function (p) {
         return [
           '<div class="font-medium">' + esc(p.name) + '</div><div class="text-xs text-slate-500 lp-mono">' + esc(p.reg_no) + '</div>',
           esc(p.system), esc(p.project || '—'), '<span class="lp-num">' + fmtTime(p.check_in_at) + '</span><div class="text-xs text-slate-500">' + dur(p.duration_ms) + '</div>',
           visitBadge(p),
+          presenceBadge(p.presence),
           can('forceCheckOut') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="force-out" data-id="' + esc(p.visit_id) + '" data-name="' + esc(p.name) + '">Check out</button>' : ''
         ];
       });
-      return card('Who’s in the lab', list.length ? table(['Person', 'System', 'Project', 'Since', 'Status', ''], rows) : empty('Nobody is checked in.', 'users'),
+      return card('Who’s in the lab', list.length ? table(['Person', 'System', 'Project', 'Since', 'Check-in', 'Right now', ''], rows) : empty('Nobody is checked in.', 'users'),
         can('manualEntry') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm" data-act="manual-entry">Manual entry</button>' : '');
     }
     function htmlActivity(list) {
@@ -1260,6 +1371,7 @@
         CHECK_IN: ['green', 'Check-in'], CHECK_OUT: ['gray', 'Check-out'], AUTO_CLOSE: ['gray', 'Auto-closed'], STAFF_CHECK_OUT: ['gray', 'Staff check-out'],
         MANUAL_ENTRY: ['blue', 'Manual entry'], MANUAL_ENTRY_OVERRIDE_HOURS: ['blue', 'Manual (after hours)'], REVIEW_CONFIRM: ['green', 'Review confirmed'],
         REVIEW_DECLINE: ['red', 'Review declined'], REQUEST: ['amber', 'Request'], ISSUE: ['blue', 'Issued'], RETURN: ['green', 'Returned'], LOAN_OVERDUE: ['red', 'Overdue'],
+        PRESENCE_OUT: ['red', 'Left the lab'], PRESENCE_BACK: ['green', 'Back in the lab'], LEFT_DURING_SESSION: ['red', 'Left during session'],
         SECURITY_CHECKIN_RED: ['red', 'Rejected check-in'], SECURITY_QR_REUSED: ['red', 'Reused QR'], SECURITY_QR_EXPIRED: ['red', 'Expired QR'], SECURITY_QR_INVALID: ['red', 'Invalid QR']
       };
       return card('Live activity', list.length ? '<ul class="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">' + list.map(function (e) {
@@ -1409,7 +1521,7 @@
           '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active"' + (lab.active !== false ? ' checked' : '') + '> Lab active</label>' +
           '<div class="flex gap-2"><button class="lp-btn lp-btn-primary">Save lab settings</button><button type="button" class="lp-btn lp-btn-ghost" data-act="new-lab">Add another lab</button></div></form>';
 
-        var monitorUrl = BOOT.webAppUrl + '?view=monitor&lab=' + encodeURIComponent(lab.lab_id || '');
+        var monitorHref = monitorUrl(lab.lab_id);
         var globalForm = '<form id="global-form" class="space-y-3">' +
           '<div class="grid sm:grid-cols-3 gap-3">' + field('Default loan (h)', input('default_loan_hours', g.default_loan_hours, 'type="number"')) + field('Max loan (h)', input('max_loan_hours', g.max_loan_hours, 'type="number"')) +
           field('Max open requests / student', input('max_open_requests', g.max_open_requests, 'type="number"')) + '</div>' +
@@ -1422,6 +1534,11 @@
           field('Open reservations / student', input('max_open_bookings', g.max_open_bookings, 'type="number"')) + '</div>' +
           '<div class="grid sm:grid-cols-2 gap-3">' + field('Archive rows older than (months)', input('archive_after_months', g.archive_after_months, 'type="number"')) +
           field('Daily backups to keep', input('backup_keep_days', g.backup_keep_days, 'type="number"')) + '</div>' +
+          '<div class="rounded-xl border border-slate-200 p-3 space-y-3"><label class="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" name="presence_enabled"' + (g.presence_enabled ? ' checked' : '') + '> GPS live mode: confirm students stay inside during their visit</label>' +
+          '<div class="grid sm:grid-cols-3 gap-3">' + field('Location check every (s)', input('presence_ping_sec', g.presence_ping_sec, 'type="number"')) +
+          field('“Not seen” after (min)', input('presence_not_seen_min', g.presence_not_seen_min, 'type="number"')) +
+          field('Check out after out/unseen (min)', input('presence_away_close_min', g.presence_away_close_min, 'type="number"')) + '</div>' +
+          '<p class="text-xs text-slate-500">Only inside/outside is kept, never coordinates. Manual entries are not watched.</p></div>' +
           '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="missing_list_email"' + (g.missing_list_email ? ' checked' : '') + '> Email faculty the list of missing students after each course session</label>' +
           field('Extra digest recipients (emails)', '<textarea class="lp-input" name="report_recipients" rows="2">' + esc(g.report_recipients.join('\n')) + '</textarea>') +
           field('Test accounts allowed outside the institutional domains (leave empty in production)', '<textarea class="lp-input" name="extra_allowed_emails" rows="2">' + esc(g.extra_allowed_emails.join('\n')) + '</textarea>') +
@@ -1441,7 +1558,7 @@
         }).join('') + '<button class="lp-btn lp-btn-primary lp-btn-sm" data-act="install-triggers">Install background triggers</button></div>';
 
         return '<div class="grid xl:grid-cols-2 gap-4 items-start">' + card('Lab settings', labForm) +
-          '<div class="space-y-4">' + card('Lab monitor', '<p class="text-sm text-slate-600 mb-2">Open this on the lab’s wall display while signed in as lab staff:</p><a class="text-teal-700 underline break-all text-sm" target="_blank" href="' + esc(monitorUrl) + '">' + esc(monitorUrl) + '</a>') +
+          '<div class="space-y-4">' + card('Lab monitor', '<p class="text-sm text-slate-600 mb-2">Open this on the lab’s wall display while signed in as lab staff:</p><a class="text-teal-700 underline break-all text-sm" target="_blank" href="' + esc(monitorHref) + '">' + esc(monitorHref) + '</a>') +
           card('Background jobs', jobs) + card('System settings', globalForm) + '</div>' + '</div>' + card('Role permissions', perms);
       } });
     }
@@ -1505,7 +1622,8 @@
 
       'scan-help': function () {
         openModal('Check in', '<ol class="list-decimal pl-5 space-y-2 text-sm text-slate-700"><li>Open your phone’s normal camera app.</li><li>Point it at the QR code on the lab monitor.</li><li>Tap the link that appears. LabPulse opens already signed in.</li><li>Allow location once, pick why you are here, and tap <b>Check in</b>.</li></ol>' +
-          '<p class="text-xs text-slate-500 mt-3">The code changes every few seconds and works once, so a photo of it will not work later.</p>');
+          '<p class="text-xs text-slate-500 mt-3">The QR is only shown on the big screen inside the lab, never on your own dashboard. Lab staff open it from <b>QR screen</b> in their menu. The code changes every few seconds and works once, so a photo of it will not work later.</p>' +
+          (BOOT.dev && S.init && S.init.me ? '<div class="mt-4 rounded-xl border border-dashed border-slate-300 p-3 text-sm"><b>Preview only:</b> no phone handy? <a class="lp-btn lp-btn-primary lp-btn-sm ml-2" href="/scan?u=' + encodeURIComponent(S.init.me.email) + '">Simulate a scan</a></div>' : ''));
       },
       'resume-checkin': function (d) { startCheckin({ ok: true, labId: d.lab, labName: d.name, expiresInSec: Number(d.exp) }); },
       'checkout': function () {
@@ -1892,6 +2010,11 @@
     document.addEventListener('change', function (ev) {
       var t = ev.target;
       if (t.hasAttribute('data-schedule')) return showSchedule();
+      if (t.id === 'dev-pick') {
+        var em = document.querySelector('#auth-email [name=email]');
+        if (em && t.value) { em.value = t.value; em.focus(); }
+        return;
+      }
       if (t.id === 'lab-select') {
         S.lab = t.value;
         S.roster.sessionId = null;
@@ -1912,7 +2035,10 @@
 
     document.addEventListener('submit', function (ev) {
       var f = ev.target;
-      if (f.id === 'lab-form') {
+      if (f.id === 'auth-email') {
+        ev.preventDefault();
+        submitEmail(f);
+      } else if (f.id === 'lab-form') {
         ev.preventDefault();
         call('saveLab', formData(f)).then(function (lab) {
           toast('Lab settings saved.');
