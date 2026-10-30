@@ -8,8 +8,9 @@
  * Wi-Fi can scan it. GPS stays simulated: phones only allow real GPS on https pages,
  * which the deployed Apps Script app has.
  *
- * Differences from the deployed app: identity comes from a role picker instead of Google
- * sign-in, GPS can be simulated, PDFs are rendered as HTML pages, and emails go to an outbox.
+ * Differences from the deployed app: sign-in codes are shown in a "Preview inbox" instead of
+ * being emailed, the dev tools page can switch to any test account instantly, GPS can be
+ * simulated, and PDFs are rendered as HTML pages.
  */
 'use strict';
 const http = require('http');
@@ -45,7 +46,7 @@ const sync = () => { env.clock.ms = Date.now(); env.ctx.Db.reset(); };
 sync();
 env.session.active = '';
 env.run(`
-  Db.update('Config', Db.byId('Config', 'AIIOT'), { open_time: '00:00', close_time: '23:59', open_days: 'SUN,MON,TUE,WED,THU,FRI,SAT' });
+  Db.update('Config', Db.byId('Config', 'AIIOT'), { open_time: '00:00', close_time: '23:59', open_days: 'SUN,MON,TUE,WED,THU,FRI,SAT', qr_rotate_sec: 30 });
   Settings.syncFromSheet();
   Settings.props().setProperty('APP_SETTINGS', JSON.stringify(Object.assign(Settings.global(), {
     presence_ping_sec: 15, presence_not_seen_min: 2, presence_away_close_min: 5
@@ -163,7 +164,8 @@ function shim(as, gps) {
     try { Object.defineProperty(navigator, 'geolocation', { value: geo, configurable: true }); } catch (e) {}
   })();` : ''}
   </script>
-  <a href="/dev" title="Preview tools: simulated GPS, test accounts, lab monitor" style="position:fixed;right:10px;bottom:10px;z-index:9999;font:600 11px system-ui;background:#121212;color:#7ee2c3;padding:5px 9px;border-radius:99px;opacity:.75;text-decoration:none">Preview · dev tools</a>`;
+  <style>@media (max-width:1023px){body:has(.lp-tabbar) .dev-badge{bottom:84px!important}}</style>
+  <a href="/dev" class="dev-badge" title="Preview tools: simulated GPS, test accounts, lab monitor" style="position:fixed;right:10px;bottom:10px;z-index:9999;font:600 11px system-ui;background:#121212;color:#7ee2c3;padding:5px 9px;border-radius:99px;opacity:.75;text-decoration:none">Preview · dev tools</a>`;
 }
 
 function renderApp(file, boot, as, gps) {
@@ -181,11 +183,6 @@ function doGet(as, params) {
   boot.webAppUrl = PUBLIC + '/app';
   boot.dev = { accounts: PEOPLE };
   return { file: out.file + '.html', boot };
-}
-
-/** What a visitor with no Google identity sees (the real app always has one; the preview may not). */
-function anonymousBoot(view) {
-  return { view: view, webAppUrl: PUBLIC + '/app', dev: { accounts: PEOPLE } };
 }
 
 function landing(c) {
@@ -220,19 +217,6 @@ function landing(c) {
   </section></div></body></html>`;
 }
 
-function picker(dev, claim) {
-  const esc = (s) => String(s).replace(/[&<>"]/g, (x) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[x]));
-  const users = PEOPLE.filter((p) => p[2].indexOf('Student') === 0 || p[0].indexOf('newcomer') === 0 || p[0].indexOf('gmail') !== -1);
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>LabPulse preview · who are you?</title><script src="https://cdn.tailwindcss.com/3.4.16"></script></head>
-  <body class="bg-slate-100 text-slate-900"><div class="max-w-md mx-auto p-5 space-y-4">
-  ${claim.ok ? `<h1 class="text-xl font-bold">Who is scanning?</h1>
-  <p class="text-sm text-slate-600">Scan accepted for ${esc(claim.labName)}. In the real app Google sign-in tells LabPulse who you are; in this preview, pick a test user. Your scan is held for 5 minutes.</p>
-  ${users.map((p) => `<a class="block rounded-xl bg-white border px-4 py-3" href="/pick?u=${encodeURIComponent(p[0])}&d=${encodeURIComponent(dev)}"><div class="font-semibold">${esc(p[1])}</div><div class="text-xs text-slate-500">${esc(p[0])}</div></a>`).join('')}`
-  : `<div class="rounded-xl bg-red-50 text-red-900 p-5"><h1 class="text-lg font-bold">Not checked in</h1><p class="mt-1">${esc(claim.message)}</p></div>`}
-  </div></body></html>`;
-}
-
 /* ---------- server ---------- */
 
 const server = http.createServer((req, res) => {
@@ -246,7 +230,7 @@ const server = http.createServer((req, res) => {
   try {
     if (url.pathname === '/') {
       // The product's own landing page; signed-in or not.
-      const p = c.as ? doGet(c.as, {}) : { file: 'Index.html', boot: anonymousBoot('landing') };
+      const p = doGet(c.as || '', {});
       return send(200, renderApp(p.file, p.boot, c.as || '', c.gps || 'inside'));
     }
     if (url.pathname === '/dev') return send(200, landing(c));
@@ -255,6 +239,11 @@ const server = http.createServer((req, res) => {
       return redirect(/^(login|signup)$/.test(nextView || '') ? '/app?view=' + nextView : '/app?view=login', 'as=; Path=/; Max-Age=0');
     }
     if (url.pathname === '/as') return redirect(url.searchParams.get('next') || '/app', 'as=' + encodeURIComponent(url.searchParams.get('u')) + '; Path=/');
+    if (url.pathname === '/devmail') {
+      const to = String(url.searchParams.get('to') || '').toLowerCase();
+      const m = env.mail.filter((x) => String(x.to).toLowerCase() === to).slice(-1)[0];
+      return send(200, JSON.stringify(m ? { subject: m.subject } : {}), 'application/json');
+    }
     if (url.pathname === '/gpsnow') {
       const g = GPS[c.gps || 'inside'];
       return send(200, JSON.stringify(g && g.lat ? { lat: g.lat, lng: g.lng, accuracy: g.accuracy } : {}), 'application/json');
@@ -267,32 +256,11 @@ const server = http.createServer((req, res) => {
       if (!tick.open) return send(200, '<p>The lab is closed in settings, so the monitor shows no QR.</p><a href="/">Back</a>');
       return redirect('/app?t=' + encodeURIComponent(tick.token), 'as=' + encodeURIComponent(url.searchParams.get('u')) + '; Path=/');
     }
-    if (url.pathname === '/pick') {
-      // Hand the scan this device already claimed to the chosen user, then continue to check-in.
-      const u = url.searchParams.get('u');
-      const dev = url.searchParams.get('d');
-      sync();
-      const t = env.ctx.Cache.getJson('ticket:' + dev);
-      if (t) {
-        env.ctx.Cache.remove('ticket:' + dev);
-        env.ctx.Cache.putJson('ticket:' + u, t, env.ctx.APP.TICKET_TTL_SEC);
-      }
-      return redirect('/app?resume=1', 'as=' + encodeURIComponent(u) + '; Path=/');
-    }
     if (url.pathname === '/app') {
-      if (!c.as && url.searchParams.get('t')) {
-        // Claim immediately, like the real app does when Google sign-in already knows the user.
-        sync();
-        const dev = 'device-' + Math.random().toString(36).slice(2, 10);
-        const claim = env.ctx.Attendance.claim({ email: dev, role: null, user: null, active: false }, url.searchParams.get('t'));
-        return send(200, picker(dev, claim));
-      }
       const params = Object.fromEntries(url.searchParams.entries());
-      if (!c.as) {
-        const view = ['landing', 'login', 'signup'].indexOf(params.view) !== -1 ? params.view : 'login';
-        return send(200, renderApp('Index.html', anonymousBoot(view), '', c.gps || 'inside'));
-      }
-      const p = doGet(c.as, params);
+      // No dev cookie: behave exactly like the deployed app with email-code sign-in. The real doGet
+      // decides the page (monitor, held QR scan, login…); the browser's saved session does the rest.
+      const p = doGet(c.as || '', params);
       if (params.resume && p.boot.init && p.boot.init.me && p.boot.init.me.registered) {
         const t = env.ctx.Attendance.ticket(c.as);
         if (t) { p.boot.view = 'checkin'; p.boot.claim = { ok: true, labId: t.labId, labName: t.labName, expiresInSec: t.expiresInSec }; }

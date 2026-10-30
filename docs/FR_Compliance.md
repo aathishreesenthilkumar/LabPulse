@@ -9,7 +9,7 @@ Every line of the client's functional requirements, where LabPulse implements it
 | Requirement | Where | Proved by |
 |---|---|---|
 | Domain lock: only @karunya.edu / @karunya.edu.in | `Auth.context` (`src/Auth.js`), `APP.ALLOWED_DOMAINS` | AT-01; pipeline: every action rejects an outside account |
-| Profile: name, roll no. / employee ID, Karunya email, mobile | `Auth.register` (mobile stored encrypted) | FR-02 test; registration UI test; validation test |
+| Profile: name, roll no. / employee ID, Karunya email, mobile | `Auth.register`. **Mobile dropped at the lab's request:** name + register number complete the profile; a mobile number, if ever given, is still stored encrypted. | FR-02 test; registration UI test; validation test |
 | RBAC — Student: scan QR, GPS check-in/out, live counter, visit reason, request bookings, borrowing history | `ROUTES` (`src/Api.js`); student pages Home, Equipment, My projects, My history | AT-02, AT-05, AT-06; UI tests |
 | RBAC — Faculty: live roster, verify attendance, export session logs | `Monitoring.roster`, `Attendance.review`, `Reports.exportRange` / `sessionLogPdf` | FR-27, AT-13, missing-list test |
 | RBAC — Lab In-charge / Staff: activity stream, live occupancy, inventory add/edit/remove, issue/return handshake | Live page; `inventorySave` / `inventoryRemove` open to staff **and** coordinator | Lifecycle test; coordinator/staff inventory test |
@@ -20,7 +20,7 @@ Every line of the client's functional requirements, where LabPulse implements it
 
 | Requirement | Where | Proved by |
 |---|---|---|
-| Dynamic time-based QR on a lab monitor, rotating every 5–10 s | `Token.js`, `Monitor.html` (rotation is a setting, validated 5–10) | FR-17, AT-15; monitor UI test |
+| Dynamic time-based QR on a lab monitor, rotating every 5–10 s | `Token.js`, `Monitor.html`. Rotation is a setting, validated 5–60 s. **Changed at the lab's request to 30 s** so students have time to scan; each code still works once and expires within 60 s. | FR-17, AT-15; monitor UI test |
 | Haversine geofence, 15–20 m | `Geo.haversine` / `Geo.evaluate`; radius validated 15–20 | AT-02, Red-outside test |
 | Entry reason — Lab course: code, name, session hours | Timetable list, or a form with exactly those fields if not listed | FR-09, unlisted-course tests |
 | Entry reason — Event: name, coordinator, expected duration | Same | Unlisted-event test |

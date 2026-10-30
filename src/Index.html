@@ -5,6 +5,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LabPulse</title>
+    <script>
+      // Night or day theme: the saved choice, else the device setting. Runs before anything draws.
+      (function () {
+        var t = 'light';
+        try {
+          t = localStorage.getItem('labpulse.theme');
+          if (t !== 'light' && t !== 'dark') t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        } catch (e) { t = 'light'; }
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
     <script src="https://cdn.tailwindcss.com/3.4.16"></script>
     <?!= include_('Styles'); ?>
     <?!= include_('Landing'); ?>
@@ -18,6 +29,8 @@
     <script>
       window.BOOT = <?!= bootJson ?>;
     </script>
+    <?!= include_('Twin'); ?>
+    <?!= include_('Boundary'); ?>
     <?!= include_('Client'); ?>
   </body>
 </html>

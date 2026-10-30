@@ -46,6 +46,10 @@ test('every action, called by every kind of user, answers cleanly and obeys the 
         const r = env.as(email)(action, payload);
         const where = action + ' as ' + email + ' ' + JSON.stringify(payload);
         if (!r || typeof r.ok !== 'boolean') return problems.push(where + ': malformed reply');
+        if (route.anon) { // sign-in steps run before anyone is identified; they check the typed email instead
+          if (!r.ok && (r.code === 'SERVER' || !r.message)) problems.push(where + ': unclean refusal (' + r.code + ')');
+          return;
+        }
         if (r.ok) {
           if (role === 'OUTSIDER') problems.push(where + ': outsider got through');
           return;

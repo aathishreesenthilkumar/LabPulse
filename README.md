@@ -65,7 +65,7 @@ npm run preview
 
 Open **http://localhost:8787**. The start page lets you open the lab monitor, choose a simulated location, scan as a student, and open any role's dashboard.
 
-**Scanning with a real phone:** connect the phone to the **same Wi-Fi** as the laptop and point its camera at the monitor's QR. The QR uses the laptop's Wi-Fi address, which the terminal prints, e.g. `http://192.168.1.8:8787`. The phone asks "Who is scanning?", then continues to check-in. If the phone can't load the page, allow Node.js through Windows Firewall for private networks.
+**Scanning with a real phone:** connect the phone to the **same Wi-Fi** as the laptop and point its camera at the monitor's QR. The QR uses the laptop's Wi-Fi address, which the terminal prints, e.g. `http://192.168.1.8:8787`. If the phone is not signed in yet, it asks for an email, holds the scan while you enter the code from the **Preview inbox**, then continues to check-in. If the phone can't load the page, allow Node.js through Windows Firewall for private networks.
 
 In the preview, location is simulated, because phones allow real GPS only on `https` pages. The deployed Apps Script app is `https`, so it uses the phone's real GPS.
 
@@ -88,6 +88,23 @@ Use your **Karunya account**. A personal Gmail can't identify other users; see *
 8. On the lab PC, signed in as staff or coordinator, open `<URL>?view=monitor&lab=AIIOT` in full screen.
 
 To update after a code change: `npx clasp push`, then Deploy → Manage deployments → Edit → New version.
+
+### Sign-in with an email code
+
+People sign in by typing their Karunya email. LabPulse emails a 6-digit code, and they type it in. The browser then stays signed in for 30 days, or until they sign out.
+
+- **Who sends the code:** the Google account that owns and deploys the script. To send codes from **labpulse@gmail.com**:
+  - sign in to script.google.com and `npx clasp login` **as labpulse@gmail.com**;
+  - deploy with *Execute as: Me*;
+  - approve the "send email as you" permission once.
+  No mail password is stored anywhere. Never put one in the code.
+- **Who can open the app:** with code sign-in, the deployment can use *Who has access: Anyone*. LabPulse still admits only @karunya.edu and @karunya.edu.in emails, checked by the code.
+- **Daily email limit:** a free Gmail account can send about **100 emails a day** from Apps Script; a Google Workspace account can send 1,500. Each person needs a code only when they sign in on a new device, or every 30 days. For a large first-day sign-up, deploy from a Workspace account or spread registrations over a few days.
+- **Safety:**
+  - Codes expire in 10 minutes and allow 5 tries.
+  - A new code can be sent once a minute and 5 times an hour.
+  - Only hashes of codes and session tokens are stored, in the `Sessions` sheet.
+- In the preview nothing is really emailed. The code appears in a **Preview inbox** box under the code boxes.
 
 ### Identity
 

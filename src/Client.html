@@ -18,7 +18,7 @@
       active: [],
       roster: { sessionId: null, date: null },
       report: { kind: 'daily' },
-      page: BOOT.view === 'monitor' ? 'app' : BOOT.view || 'landing'
+      page: BOOT.view === 'monitor' ? 'app' : BOOT.view || 'app'
     };
 
     /* ================= helpers ================= */
@@ -50,17 +50,27 @@
     function fromLocalInput(v) { return v ? new Date(v + ':00+05:30').toISOString() : ''; }
 
     /** google.script.run as a promise. Server replies {ok, data} or {ok:false, code, message}. */
+    /** Email-code sign-in leaves a session token in this browser; it travels with every call. */
+    var SESSION_KEY = 'labpulse.session';
+    function getToken() { try { return localStorage.getItem(SESSION_KEY) || ''; } catch (e) { return ''; } }
+    function setToken(t) { try { localStorage.setItem(SESSION_KEY, t); } catch (e) {} }
+    function clearToken() { try { localStorage.removeItem(SESSION_KEY); } catch (e) {} }
+
     function call(action, payload) {
+      var body = Object.assign({}, payload || {});
+      var tok = getToken();
+      if (tok) body.__s = tok;
       return new Promise(function (resolve, reject) {
         google.script.run
           .withSuccessHandler(function (r) {
-            if (r && r.ok) resolve(r.data);
-            else reject(r || { code: 'SERVER', message: 'Unexpected response from the server.' });
+            if (r && r.ok) return resolve(r.data);
+            if (r && r.code === 'SESSION_EXPIRED') clearToken();
+            reject(r || { code: 'SERVER', message: 'Unexpected response from the server.' });
           })
           .withFailureHandler(function (e) {
             reject({ code: 'NETWORK', message: (e && e.message) || 'Network problem. Check your connection.' });
           })
-          .api(action, payload || {});
+          .api(action, body);
       });
     }
 
@@ -257,6 +267,9 @@
       var d = S.sections[id];
       var el = document.getElementById('sec-' + id);
       if (!d || !el) return;
+      // A repaint can be asked for before this section's first answer arrives (e.g. the status
+      // box refreshing "Free right now"); keep the loading placeholder until there is data.
+      if (d.data === undefined && !d.error) return;
       el.innerHTML = d.error ? errorBox(d.error) : d.html(d.data);
     }
     function loadAll() { S.active.forEach(loadSection); }
@@ -309,8 +322,8 @@
     var TABS = [
       { id: 'home', label: 'Home', icon: 'home', group: 'Workspace', sub: 'Your status, equipment and time in the lab', show: function () { return role() === 'STUDENT'; }, view: viewHome },
       { id: 'equipment', label: 'Equipment', icon: 'cpu', group: 'Workspace', sub: 'What the lab has and what is free right now', show: function () { return role() === 'STUDENT'; }, view: viewEquipment },
-      { id: 'projects', label: 'My projects', icon: 'folder', group: 'Workspace', sub: 'Timeline, work log and outcome of your projects', show: function () { return role() === 'STUDENT'; }, view: viewProjects },
-      { id: 'history', label: 'My history', icon: 'clock', group: 'Workspace', sub: 'Your visits and borrowing history', show: function () { return role() === 'STUDENT'; }, view: viewHistory },
+      { id: 'projects', label: 'My projects', short: 'Projects', icon: 'folder', group: 'Workspace', sub: 'Timeline, work log and outcome of your projects', show: function () { return role() === 'STUDENT'; }, view: viewProjects },
+      { id: 'history', label: 'My history', short: 'History', icon: 'clock', group: 'Workspace', sub: 'Your visits and borrowing history', show: function () { return role() === 'STUDENT'; }, view: viewHistory },
       { id: 'live', label: 'Live', icon: 'activity', group: 'Monitor', sub: 'Who is in the lab right now and what is happening', show: function () { return can('staffSummary'); }, view: viewLive },
       { id: 'sessions', label: 'Sessions', icon: 'calendar', group: 'Monitor', sub: 'Live roster for today’s courses and events', show: function () { return can('facultySessions'); }, view: viewFaculty },
       { id: 'reviews', label: 'Reviews', icon: 'check', group: 'Monitor', sub: 'Check-ins waiting for a one-tap confirmation', show: function () { return can('reviewQueue'); }, view: viewReviews },
@@ -337,35 +350,66 @@
       var me = S.init.me;
       var labs = S.init.labs || [];
       var group = null;
-      var nav = visibleTabs().map(function (t) {
+      var nav = visibleTabs().map(function (t, i) {
         var head = t.group !== group ? '<div class="lp-nav-group">' + esc(t.group) + '</div>' : '';
         group = t.group;
         return head + '<button class="lp-nav-item" role="tab" aria-selected="' + (t.id === S.tab) + '" data-act="tab" data-tab="' + t.id + '">' +
-          icon(t.icon) + '<span>' + esc(t.label) + '</span></button>' +
+          icon(t.icon) + '<span>' + esc(t.label) + '</span><em class="lp-nav-num">' + String(i + 1).padStart(2, '0') + '</em></button>' +
           (t.id === 'live' && can('monitorTick') ? monitorLink('lp-nav-item', 'QR screen ↗') : '');
       }).join('');
       return '<aside class="lp-side" aria-label="Main navigation">' +
-        '<div class="lp-side-brand"><div class="lp-logo">' + icon('pulse', 'w-5 h-5') + '</div><div><div class="font-bold text-white leading-tight tracking-tight">LabPulse</div>' +
-        '<div class="text-[11px] text-slate-400 leading-tight">Lab attendance &amp; assets</div></div></div>' +
+        '<div class="lp-side-brand"><div class="lp-logo">' + icon('pulse', 'w-5 h-5') + '</div><div><div class="lp-brand-name">LabPulse</div>' +
+        '<div class="lp-brand-sub">Lab attendance &amp; assets</div></div></div>' +
         '<div class="px-4 pb-1">' + (labs.length > 1
-          ? '<select id="lab-select" class="w-full rounded-lg bg-white/5 border border-white/10 text-slate-200 text-sm px-2.5 py-2">' + labs.map(function (l) {
+          ? '<select id="lab-select" class="lp-lab-pill w-full">' + labs.map(function (l) {
               return '<option value="' + esc(l.lab_id) + '"' + (l.lab_id === S.lab ? ' selected' : '') + '>' + esc(l.name) + '</option>';
             }).join('') + '</select>'
-          : '<div class="rounded-lg bg-white/5 border border-white/10 text-slate-200 text-sm px-3 py-2 flex items-center gap-2">' + icon('map', 'w-4 h-4 text-teal-300') + '<span class="truncate">' + esc(curLab() ? curLab().name : '') + '</span></div>') + '</div>' +
+          : '<div class="lp-lab-pill">' + icon('map', 'w-4 h-4') + '<span class="truncate">' + esc(curLab() ? curLab().name : '') + '</span></div>') + '</div>' +
         '<nav class="lp-side-nav" role="tablist">' + nav + '</nav>' +
         '<div class="lp-side-foot"><div class="lp-avatar">' + esc(initials(me.name || me.email)) + '</div><div class="min-w-0">' +
-        '<div class="text-sm font-semibold text-white truncate">' + esc(me.name || me.email) + '</div>' +
-        '<div class="text-xs text-slate-400 truncate">' + esc(ROLE_NAMES[me.role] || '') + (me.reg_no ? ' · ' + esc(me.reg_no) : '') + '</div></div>' +
-        '<a class="lp-signout" href="' + esc(signOutUrl()) + '" target="_top" title="Sign out" aria-label="Sign out">' + icon('logout', 'w-4 h-4') + '<span>Sign out</span></a></div></aside>';
+        '<div class="lp-me-name truncate">' + esc(me.name || me.email) + '</div>' +
+        '<div class="lp-me-role truncate">' + esc(ROLE_NAMES[me.role] || '') + (me.reg_no ? ' · ' + esc(me.reg_no) : '') + '</div></div>' +
+        '<button type="button" class="lp-signout" data-act="sign-out" title="Sign out">' + icon('logout', 'w-4 h-4') + '<span>Sign out</span></button></div></aside>';
     }
 
     function topbar(tab) {
       var lab = curLab();
       return '<header class="lp-top"><div class="max-w-[1280px] mx-auto px-4 lg:px-5 py-3 flex items-center gap-3">' +
         '<button class="lp-btn lp-btn-ghost lp-btn-sm lg:hidden !px-2" data-act="nav-toggle" aria-label="Open menu">' + icon('menu') + '</button>' +
-        '<div class="min-w-0 mr-auto"><h1 class="text-lg sm:text-xl font-bold tracking-tight truncate">' + esc(tab.label) + '</h1>' +
-        '<p class="text-xs sm:text-sm text-slate-500 truncate">' + esc(tab.sub || '') + (lab ? ' · ' + esc(lab.name) : '') + '</p></div>' +
-        '<div id="occ-pill">' + occPill() + '</div></div></header>';
+        '<div class="min-w-0 mr-auto"><div class="lp-crumb">' + esc(tab.label) + (lab ? ' / ' + esc(lab.name) : '') + '</div>' +
+        '<h1 class="lp-title truncate">' + esc(tab.label) + '</h1>' +
+        '<p class="lp-subtitle truncate">' + esc(tab.sub || '') + '</p></div>' +
+        '<span class="lp-status" id="lab-status">' + labStatus(lab) + '</span>' +
+        '<div id="occ-pill">' + occPill() + '</div>' + themeButton() + '</div></header>';
+    }
+
+    /** "● Lab open · closes 20:00 · 14:32 IST": the lab's live status, as the wall clock sees it. */
+    function labStatus(lab) {
+      if (!lab) return '';
+      var parts = {};
+      try {
+        new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+          .formatToParts(new Date()).forEach(function (x) { parts[x.type] = x.value; });
+      } catch (e) { return ''; }
+      var hm = (parts.hour === '24' ? '00' : parts.hour) + ':' + parts.minute;
+      var day = String(parts.weekday || '').toUpperCase().slice(0, 3);
+      var days = String(lab.open_days || '').split(',');
+      var open = days.indexOf(day) !== -1 && hm >= lab.open_time && hm < lab.close_time;
+      return '<i class="' + (open ? 'on' : 'off') + '"></i>' + (open ? 'Lab open · closes ' + esc(lab.close_time) : 'Lab closed · opens ' + esc(lab.open_time)) +
+        '<span class="lp-status-time">' + hm + ' IST</span>';
+    }
+    function paintLabStatus() {
+      var el = document.getElementById('lab-status');
+      if (el) el.innerHTML = labStatus(curLab());
+    }
+    setInterval(paintLabStatus, 30000);
+
+    /** Students on a phone: the four pages they use, always one tap away at the bottom. */
+    function tabbar(tabs) {
+      if (role() !== 'STUDENT') return '';
+      return '<nav class="lp-tabbar" aria-label="Pages">' + tabs.map(function (t) {
+        return '<button data-act="tab" data-tab="' + t.id + '" aria-current="' + (t.id === S.tab ? 'page' : 'false') + '">' + icon(t.icon) + '<span>' + esc(t.short || t.label) + '</span></button>';
+      }).join('') + '</nav>';
     }
 
     function occPill() {
@@ -391,7 +435,7 @@
       var tab = tabs.filter(function (t) { return t.id === S.tab; })[0];
       app.innerHTML = '<div class="lp-shell' + (S.navOpen ? ' nav-open' : '') + '" id="shell">' + sidebar() +
         '<div class="lp-scrim" data-act="nav-close"></div>' +
-        '<div class="lp-main">' + topbar(tab) + '<main class="lp-content space-y-5">' + tab.view() + '</main></div></div>';
+        '<div class="lp-main">' + topbar(tab) + '<main class="lp-content space-y-5">' + tab.view() + '</main></div>' + tabbar(tabs) + '</div>';
       loadAll();
     }
 
@@ -423,12 +467,6 @@
     }
 
     /** Navigate between pages without a reload; keeps the address bar in step where possible. */
-    /** Signing out of a Google-identity app means signing out of Google, then choosing an account again. */
-    function signOutUrl() {
-      if (BOOT.dev) return '/logout';
-      return 'https://accounts.google.com/Logout?continue=' + encodeURIComponent(switchAccountUrl('login'));
-    }
-
     function goPage(page) {
       S.page = page;
       try {
@@ -443,15 +481,30 @@
       return 'https://accounts.google.com/AccountChooser?' + (email ? 'Email=' + encodeURIComponent(email) + '&' : '') + 'continue=' + encodeURIComponent(BOOT.webAppUrl + '?view=' + (back || 'login'));
     }
 
-    var GOOGLE_G = '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 7l7.3 5.7c4.3-4 7-9.9 7-17.2z"/><path fill="#FBBC05" d="M10.6 28.6A14.4 14.4 0 0 1 9.5 24c0-1.6.3-3.2.8-4.6l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.3-5.7c-2 1.4-4.7 2.3-8.6 2.3-6.2 0-11.5-4.1-13.4-9.9l-8 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
+
+    /* ---------- night / day theme ---------- */
+    var MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></svg>';
+    var SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg>';
+    function themeNow() { return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
+    function themeButton() {
+      var dark = themeNow() === 'dark';
+      var label = dark ? 'Switch to day theme' : 'Switch to night theme';
+      return '<button type="button" class="lp-theme" data-act="theme" aria-pressed="' + dark + '" aria-label="' + label + '" title="' + label + '">' + (dark ? SUN : MOON) + '</button>';
+    }
+    function setTheme(t) {
+      document.documentElement.setAttribute('data-theme', t);
+      try { localStorage.setItem('labpulse.theme', t); } catch (e) {}
+      Array.prototype.forEach.call(document.querySelectorAll('.lp-theme'), function (b) { b.outerHTML = themeButton(); });
+      if (document.getElementById('twin-host')) render(); // the 3D scene picks its colours when built
+    }
 
     function landingCtas(slot) {
       var id = identity();
       if (id.known && id.registered) {
-        return slot === 'nav' ? '<button class="lx-btn lx-btn-dark" data-act="go" data-page="app">Open dashboard</button>'
+        return slot === 'nav' ? themeButton() + '<button class="lx-btn lx-btn-dark" data-act="go" data-page="app">Open dashboard</button>'
           : '<button class="lx-btn lx-btn-dark lx-btn-lg" data-act="go" data-page="app">Open your dashboard</button><a class="lx-btn lx-btn-line lx-btn-lg" href="#how">How it works</a>';
       }
-      return slot === 'nav' ? '<button class="lx-btn lx-btn-text" data-act="go" data-page="login">Log in</button><button class="lx-btn lx-btn-dark" data-act="go" data-page="signup">Sign up</button>'
+      return slot === 'nav' ? themeButton() + '<button class="lx-btn lx-btn-text" data-act="go" data-page="login">Log in</button><button class="lx-btn lx-btn-dark" data-act="go" data-page="signup">Sign up</button>'
         : '<button class="lx-btn lx-btn-dark lx-btn-lg" data-act="go" data-page="signup">Create your account</button><button class="lx-btn lx-btn-line lx-btn-lg" data-act="go" data-page="login">Log in</button>';
     }
 
@@ -486,94 +539,236 @@
 
     function authShell(inner) {
       return '<div class="lx"><div class="lx-auth">' +
-        '<header class="lx-auth-top"><button class="lx-mark" data-act="go" data-page="landing" aria-label="LabPulse home">' +
-        '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#121212"/><path d="M6 17h5l2.5-7 5 13 2.5-6H26" fill="none" stroke="#7ee2c3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>LabPulse</button>' +
-        '<button class="lx-btn lx-btn-text" data-act="go" data-page="landing">← Back to site</button></header>' +
+        '<header class="lx-auth-top"><span class="lx-mark" aria-label="LabPulse">' +
+        '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#121212"/><path d="M6 17h5l2.5-7 5 13 2.5-6H26" fill="none" stroke="#7ee2c3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>LabPulse</span>' +
+        '<div class="lx-auth-right">' + themeButton() + '</div></header>' +
         '<main class="lx-auth-box">' + inner + '</main>' +
         '<p class="lx-auth-foot">Only @karunya.edu and @karunya.edu.in accounts · Intel Unnati IoT Lab, Karunya</p></div></div>';
     }
 
     /**
-     * The usual sign-in pattern: type your email, press Continue.
-     * Deployed: Google confirms it is you (and asks for a password only if needed).
-     * Preview: there is no Google sign-in on a laptop, so the email signs in directly; test accounts are in a dropdown.
+     * One step for everyone (as Notion and Slack do it): type your college email, get a 6-digit
+     * code. New people are then asked for their name and register number; nobody needs to know
+     * whether they "sign up" or "log in". A device remembers the last email for a one-tap return.
      */
+    var LAST_ACCOUNT_KEY = 'labpulse.lastAccount';
+    function lastAccount() {
+      try { var a = JSON.parse(localStorage.getItem(LAST_ACCOUNT_KEY) || 'null'); return a && a.email ? a : null; } catch (e) { return null; }
+    }
+    function rememberAccount(email, name) {
+      try { localStorage.setItem(LAST_ACCOUNT_KEY, JSON.stringify({ email: email, name: name || '' })); } catch (e) {}
+    }
+
+    function trustRow() {
+      return '<ul class="lx-trust"><li>No password</li><li>Karunya emails only</li><li>Code expires in 10 min</li></ul>';
+    }
     function emailStep(prefill) {
+      var remembered = !prefill && !S.authOther ? lastAccount() : null;
       var list = (BOOT.dev && BOOT.dev.accounts) || [];
-      var pick = list.length ? '<label class="lx-field"><span>Or pick a test account <em class="lx-tag">Preview</em></span>' +
-        '<select id="dev-pick"><option value="">Choose an account…</option>' + list.map(function (a) {
-          return '<option value="' + esc(a[0]) + '"' + (a[0] === prefill ? ' selected' : '') + '>' + esc(a[1] + ' — ' + a[2]) + '</option>';
-        }).join('') + '</select><small>Fills in the email above. The deployed app uses your Google sign-in instead.</small></label>' : '';
+      var dev = list.length ? '<details class="lx-dev"><summary>Preview · use a test account</summary><div>' + list.map(function (a) {
+        return '<button type="button" data-act="dev-use" data-email="' + esc(a[0]) + '"><b>' + esc(a[1]) + '</b><span>' + esc(a[2]) + '</span></button>';
+      }).join('') + '</div></details>' : '';
+      if (remembered) {
+        return '<button type="button" class="lx-continue" data-act="auth-continue-as" data-email="' + esc(remembered.email) + '" id="auth-btn">' +
+          '<span class="lx-avatar">' + esc(initials(remembered.name || remembered.email.split('@')[0])) + '</span>' +
+          '<span class="lx-continue-text"><b>Continue as ' + esc(remembered.name || remembered.email.split('@')[0]) + '</b><span>' + esc(remembered.email) + '</span></span><span class="lx-continue-go" aria-hidden="true">→</span></button>' +
+          '<div id="auth-error" class="lx-alert err" style="display:none;margin-top:14px"></div>' +
+          '<p class="lx-or"><button type="button" class="lx-link" data-act="auth-other">Use a different email</button></p>' + trustRow() + dev;
+      }
       return '<form id="auth-email" novalidate>' +
-        '<label class="lx-field"><span>Karunya email</span><input name="email" type="email" required autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="urk24cs1249@karunya.edu.in" value="' + esc(prefill || '') + '"></label>' +
-        pick +
+        '<label class="lx-field"><span>College email</span><input name="email" type="email" required autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@karunya.edu.in" value="' + esc(prefill || '') + '">' +
+        '<small>Your @karunya.edu or @karunya.edu.in address.</small></label>' +
         '<div id="auth-error" class="lx-alert err" style="display:none"></div>' +
-        '<button class="lx-submit" id="auth-btn">Continue</button>' +
-        (BOOT.dev ? '' : '<p class="lx-note" style="margin-top:12px;text-align:center">You’ll confirm with your Karunya Google account. LabPulse never sees your password.</p>') +
-        '</form>';
+        '<button class="lx-submit" id="auth-btn">Continue with email</button>' +
+        '</form>' + trustRow() + dev;
     }
     function domainError(e) {
       return e && e.code === 'DOMAIN' ? '<div class="lx-alert err"><b>This account can’t use LabPulse.</b> Only @karunya.edu and @karunya.edu.in accounts are allowed.</div>'
         : e && e.message && e.code !== 'NO_IDENTITY' ? '<div class="lx-alert err">' + esc(e.message) + '</div>' : '';
     }
     function submitEmail(f) {
-      var email = String(f.querySelector('[name=email]').value || '').trim().toLowerCase();
+      startCode(String(f.querySelector('[name=email]').value || '').trim().toLowerCase());
+    }
+    /** Sends the code (or reuses one sent moments ago) and moves to the code screen. */
+    function startCode(email) {
       var err = document.getElementById('auth-error');
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-        err.textContent = 'Enter your full email address, e.g. urk24cs1249@karunya.edu.in';
-        err.style.display = 'block';
-        return;
-      }
-      var btn = document.getElementById('auth-btn');
-      btn.disabled = true;
-      btn.textContent = 'Continuing…';
+      var showErr = function (html) { if (err) { err.innerHTML = html; err.style.display = 'block'; } };
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return showErr('Enter your full college email, for example you@karunya.edu.in');
       var id = identity();
+      // Already signed in as this email (Google account or an earlier code): no new code needed.
       if (id.known && id.me.email.toLowerCase() === email) return goPage(id.registered ? 'app' : 'signup');
-      if (BOOT.dev) { location.href = '/as?u=' + encodeURIComponent(email) + '&next=' + encodeURIComponent('/app?view=app'); return; }
-      window.top.location.href = switchAccountUrl('app', email);
+      var btn = document.getElementById('auth-btn');
+      var label = btn ? btn.innerHTML : '';
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="lp-spin"></span> Sending your code…'; }
+      if (err) err.style.display = 'none';
+      call('authStart', { email: email }).then(function (r) {
+        S.auth = { email: r.email, masked: r.masked, newUser: r.newUser, resendAt: Date.now() + r.resendInSec * 1000, expiresAt: Date.now() + r.expiresInSec * 1000 };
+        render();
+        if (!r.sent) toast('We sent you a code moments ago. Use that one, or ask for a new one in ' + r.resendInSec + ' s.');
+      }, function (e) {
+        if (btn) { btn.disabled = false; btn.innerHTML = label; }
+        showErr(e.code === 'DOMAIN' ? '<b>This email can’t use LabPulse.</b> Only @karunya.edu and @karunya.edu.in addresses are allowed.' : esc(e.message));
+      });
+    }
+
+    /** Step 2: the 6-digit code, the way Slack, Notion and Linear do it. */
+    function codeStep() {
+      var a = S.auth;
+      var boxes = '';
+      for (var i = 0; i < 6; i++) {
+        boxes += '<input class="lx-otp-box" data-i="' + i + '" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit ' + (i + 1) + '"' + (i === 0 ? ' autocomplete="one-time-code" autofocus' : ' autocomplete="off"') + '>';
+      }
+      var gmail = 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(a.email);
+      return '<button type="button" class="lx-back" data-act="auth-back">← Use a different email</button>' +
+        '<h1>Check your <em>email.</em></h1>' +
+        '<p class="sub">Enter the 6-digit code we sent to <b>' + esc(a.masked) + '</b>.</p>' +
+        (BOOT.pass && BOOT.pass.ok ? '<div class="lx-alert info">Your QR scan is held while you sign in.</div>' : '') +
+        '<form id="auth-code" novalidate><div class="lx-otp" role="group" aria-label="6-digit code">' + boxes + '</div>' +
+        '<div id="auth-error" class="lx-alert err" style="display:none"></div>' +
+        '<button class="lx-submit" id="code-btn">' + (a.newUser ? 'Verify and continue' : 'Sign in') + '</button></form>' +
+        '<div class="lx-code-meta"><span id="code-exp"></span><a class="lx-mailbtn" href="' + esc(gmail) + '" target="_blank" rel="noopener">Open Gmail ↗</a></div>' +
+        '<p class="lx-resend">Didn’t get it? It can take a minute; check Spam too. <button type="button" class="lx-link" data-act="auth-resend" id="resend-btn">Send a new code</button><span id="resend-wait"></span></p>' +
+        (BOOT.dev ? '<div class="lx-devmail" id="dev-inbox"><b>Preview inbox</b><span>Checking for the email…</span></div>' : '');
+    }
+    function afterCodeStep() {
+      var first = document.querySelector('.lx-otp-box');
+      if (first) first.focus();
+      paintResend();
+      if (S._resendTimer) clearInterval(S._resendTimer);
+      S._resendTimer = setInterval(function () { if (!document.getElementById('resend-btn')) { clearInterval(S._resendTimer); S._resendTimer = null; return; } paintResend(); }, 1000);
+      if (BOOT.dev) setTimeout(devInbox, 500);
+    }
+    function paintResend() {
+      var btn = document.getElementById('resend-btn');
+      var wait = document.getElementById('resend-wait');
+      if (!btn || !S.auth) return;
+      var left = Math.ceil((S.auth.resendAt - Date.now()) / 1000);
+      btn.disabled = left > 0;
+      wait.textContent = left > 0 ? ' in ' + left + ' s' : '';
+      var exp = document.getElementById('code-exp');
+      if (exp && S.auth.expiresAt) {
+        var sec = Math.max(0, Math.round((S.auth.expiresAt - Date.now()) / 1000));
+        exp.textContent = sec ? 'Code expires in ' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') : 'Code expired · send a new one';
+        exp.className = sec ? '' : 'lx-expired';
+      }
+    }
+    /** Preview only: there is no real mailbox, so show the email LabPulse just "sent". */
+    function devInbox() {
+      var box = document.getElementById('dev-inbox');
+      if (!box || !S.auth) return;
+      fetch('/devmail?to=' + encodeURIComponent(S.auth.email)).then(function (r) { return r.json(); }).then(function (m) {
+        var code = m && m.subject ? (m.subject.match(/\d{6}/) || [''])[0] : '';
+        box.innerHTML = '<b>Preview inbox</b>' + (code
+          ? '<span>From LabPulse: “' + esc(m.subject) + '”</span><button type="button" class="lx-link" data-act="dev-fill" data-code="' + code + '">Use this code</button>'
+          : '<span>No email yet.</span>');
+      }, function () {});
+    }
+    function codeValue() {
+      return Array.prototype.map.call(document.querySelectorAll('.lx-otp-box'), function (b) { return b.value; }).join('');
+    }
+    function fillCode(digits) {
+      var boxes = document.querySelectorAll('.lx-otp-box');
+      digits = String(digits).replace(/\D/g, '').slice(0, 6);
+      Array.prototype.forEach.call(boxes, function (b, i) { b.value = digits[i] || ''; });
+      var next = boxes[Math.min(digits.length, 5)];
+      if (next) next.focus();
+      if (digits.length === 6) submitCode();
+    }
+    function submitCode() {
+      var code = codeValue();
+      var err = document.getElementById('auth-error');
+      var btn = document.getElementById('code-btn');
+      if (!/^\d{6}$/.test(code)) { err.textContent = 'Enter all 6 digits from the email.'; err.style.display = 'block'; return; }
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      err.style.display = 'none';
+      call('authVerify', { email: S.auth.email, code: code }).then(function (r) {
+        setToken(r.token);
+        rememberAccount(S.auth.email, '');
+        return call('bootstrap');
+      }).then(function (init) {
+        S.init = init;
+        S.auth = null;
+        return claimHeldScan();
+      }).then(function () {
+        S.page = S.init.me.registered ? (BOOT.view === 'checkin' ? 'checkin' : 'app') : 'signup';
+        startApp();
+      }, function (e) {
+        btn.disabled = false;
+        btn.textContent = S.auth && S.auth.newUser ? 'Verify email' : 'Log in';
+        err.textContent = e.message;
+        err.style.display = 'block';
+        var form = document.getElementById('auth-code');
+        if (form) { form.classList.remove('lx-shake'); void form.offsetWidth; form.classList.add('lx-shake'); }
+        fillCode('');
+      });
+    }
+    /** A QR scanned before signing in is held on the server; claim it now that we know who this is. */
+    function claimHeldScan() {
+      if (!BOOT.pass || BOOT.claim) return Promise.resolve();
+      if (!BOOT.pass.ok) { BOOT.claim = BOOT.pass; return Promise.resolve(); }
+      return call('claimPass', { pass: BOOT.pass.pass }).then(function (c) { BOOT.claim = c; }, function (e) { BOOT.claim = { ok: false, message: e.message }; });
+    }
+    function signOut() {
+      var done = function () {
+        clearToken();
+        stopPresence();
+        if (BOOT.dev) { location.href = '/logout'; return; }
+        S.init = null;
+        S.auth = null;
+        goPage('login');
+      };
+      call('authSignOut').then(done, done);
     }
 
     function accountCard(me, sub) {
       return '<div class="lx-account"><span class="lx-avatar">' + esc(initials(me.name || me.email)) + '</span><span style="min-width:0;flex:1">' +
         '<b style="display:block;font-size:15px;overflow:hidden;text-overflow:ellipsis">' + esc(me.name || me.email) + '</b>' +
-        '<span class="lx-note">' + esc(sub || me.email) + '</span></span>' + GOOGLE_G + '</div>';
+        '<span class="lx-note">' + esc(sub || me.email) + '</span></span></div>';
     }
 
     function renderLogin() {
       var id = identity();
+      if (S.auth && !id.known) { document.getElementById('app').innerHTML = authShell(codeStep()); return afterCodeStep(); }
       document.getElementById('app').innerHTML = authShell(
-        '<h1>Log in to <em>LabPulse</em></h1><p class="sub">Check in, reserve equipment and see your lab time.</p>' +
+        '<h1>Sign in to <em>LabPulse</em></h1><p class="sub">Enter your college email and we’ll send you a 6-digit code. First time here? The same step sets up your account.</p>' +
+        (BOOT.pass && BOOT.pass.ok ? '<div class="lx-alert info">Your QR scan is held for 10 minutes while you sign in.</div>' : '') +
+        (BOOT.pass && !BOOT.pass.ok ? '<div class="lx-alert err"><b>That scan didn’t work.</b> ' + esc(BOOT.pass.message) + '</div>' : '') +
         (id.known ? '' : domainError(id.error)) + emailStep(id.known ? id.me.email : '') +
-        '<p class="lx-switch">New to LabPulse? <a class="lx-link" data-act="go" data-page="signup">Create an account</a></p>');
+        '');
     }
 
     function renderSignup() {
       var id = identity();
+      if (S.auth && !id.known) { document.getElementById('app').innerHTML = authShell(codeStep()); return afterCodeStep(); }
       var steps = function (n) { return '<div class="lx-steps-mini" aria-label="Step ' + n + ' of 2"><i class="on"></i><i' + (n > 1 ? ' class="on"' : '') + '></i></div>'; };
-      var head = '<h1>Create your <em>account.</em></h1>';
       var stepNo = !id.known ? 1 : id.registered ? 0 : 2;
+      var head = stepNo === 2 ? '<h1>Almost <em>done.</em></h1>' : '<h1>Create your <em>account.</em></h1>';
       if (stepNo) head = steps(stepNo) + head;
       var body;
       if (!id.known) {
         var e = id.error;
-        body = '<p class="sub">Step 1 of 2 · Enter your Karunya email.</p>' + domainError(e) + emailStep('');
+        body = '<p class="sub">Enter your college email. We’ll send a code to confirm it’s yours, then ask for your name and register number.</p>' + domainError(e) + emailStep('');
       } else if (id.registered) {
         body = '<p class="sub">You already have a LabPulse account.</p>' + accountCard(id.me, id.me.email + ' · ' + (ROLE_NAMES[id.me.role] || '')) +
           '<button class="lx-submit" style="margin-top:16px" data-act="go" data-page="app">Go to dashboard</button>';
       } else {
         var me = id.me;
-        body = '<p class="sub">Step 2 of 2 · A one-time profile so faculty and lab staff know who you are.' +
+        var student = !me.role || me.role === 'STUDENT';
+        body = '<p class="sub">Two details so faculty and lab staff know who you are. You only do this once.' +
           (BOOT.claim && BOOT.claim.ok ? ' Your QR scan is held for a few minutes while you finish.' : '') + '</p>' +
           '<form id="reg-form" novalidate>' +
-          '<label class="lx-field"><span>Karunya email</span><input value="' + esc(me.email) + '" readonly><small>Not you? <a class="lx-link" ' + (BOOT.dev ? 'href="/logout?next=signup"' : 'href="' + esc(switchAccountUrl('signup')) + '" target="_top"') + '>Use a different email</a></small></label>' +
-          '<label class="lx-field"><span>Full name</span><input name="name" value="' + esc(me.name || '') + '" required autocomplete="name" placeholder="As on your ID card"></label>' +
-          '<label class="lx-field"><span>Register number / employee ID</span><input name="reg_no" value="' + esc(me.reg_no || '') + '" required placeholder="URK24CS1249" autocapitalize="characters"><small>Students: your register number. Staff and faculty: your employee ID.</small></label>' +
-          '<label class="lx-field"><span>Mobile number</span><input name="mobile" required inputmode="tel" placeholder="98765 43210" autocomplete="tel"><small>Stored encrypted. Only lab staff and administrators can see it; it never appears in exports.</small></label>' +
+          accountCard(me, 'Email confirmed ✓') +
+          '<label class="lx-field" style="margin-top:18px"><span>Full name</span><input name="name" value="' + esc(me.name || '') + '" required autocomplete="name" placeholder="As on your ID card"></label>' +
+          (student
+            ? '<label class="lx-field"><span>Register number</span><input name="reg_no" class="lx-upper" value="' + esc(me.reg_no || '') + '" required placeholder="URK24CS1249" autocapitalize="characters" spellcheck="false"></label>'
+            : '<label class="lx-field"><span>Employee ID</span><input name="reg_no" class="lx-upper" value="' + esc(me.reg_no || '') + '" required placeholder="EMP1234" autocapitalize="characters" spellcheck="false"></label>') +
           '<div id="reg-error" class="lx-alert err" style="display:none"></div>' +
-          '<button class="lx-submit" id="reg-btn">Create account</button></form>';
+          '<button class="lx-submit" id="reg-btn">Finish and open LabPulse</button>' +
+          '<p class="lx-or">Not you? <button type="button" class="lx-link" data-act="sign-out">Use a different email</button></p></form>';
       }
-      document.getElementById('app').innerHTML = authShell(head + body +
-        '<p class="lx-switch">Already have an account? <a class="lx-link" data-act="go" data-page="login">Log in</a></p>');
+      document.getElementById('app').innerHTML = authShell(head + body);
       var form = document.getElementById('reg-form');
       if (!form) return;
       form.addEventListener('submit', function (ev) {
@@ -581,19 +776,19 @@
         var btn = document.getElementById('reg-btn');
         var err = document.getElementById('reg-error');
         btn.disabled = true;
-        btn.textContent = 'Creating your account…';
+        btn.textContent = 'Setting up your account…';
         err.style.display = 'none';
         call('register', formData(ev.target)).then(function () {
           return call('bootstrap');
         }).then(function (init) {
           S.init = init;
           S.page = 'app';
-          afterInit();
+          startApp();
         }, function (e) {
           err.textContent = e.message;
           err.style.display = 'block';
           btn.disabled = false;
-          btn.textContent = 'Create account';
+          btn.textContent = 'Finish and open LabPulse';
         });
       });
     }
@@ -1307,13 +1502,18 @@
       if (s.pending_inside) bits.push('<span class="text-amber-700">+' + s.pending_inside + ' awaiting review</span>');
       return bits.length ? bits.join(' · ') : 'All confirmed inside';
     }
-    var LIVE_VIEWS = [['overview', 'Overview'], ['desk', 'Equipment desk'], ['activity', 'Activity'], ['map', 'Floor map']];
+    var LIVE_VIEWS = [['overview', 'Overview'], ['twin', '3D view'], ['boundary', 'Boundary'], ['desk', 'Equipment desk'], ['activity', 'Activity'], ['map', 'Floor map']];
     function viewLive() {
       var v = S.liveView || 'overview';
-      var views = LIVE_VIEWS.filter(function (x) { return x[0] !== 'desk' || can('handshake') || can('bookingsToday'); });
+      var views = LIVE_VIEWS.filter(function (x) {
+        if (x[0] === 'twin') return can('labTwin');
+        if (x[0] === 'boundary') return can('labBoundary');
+        return x[0] !== 'desk' || can('handshake') || can('bookingsToday');
+      });
       var seg = '<div class="lp-seg" role="tablist">' + views.map(function (x) {
         return '<button aria-pressed="' + (x[0] === v) + '" data-act="live-view" data-view="' + x[0] + '">' + x[1] + '</button>';
       }).join('') + (can('monitorTick') ? '<span style="margin-left:auto;align-self:center">' + monitorLink('lp-btn lp-btn-primary lp-btn-sm', 'Open QR screen') + '</span>' : '') + '</div>';
+      if (can('labTwin') && typeof LabTwin !== 'undefined') setTimeout(LabTwin.preload, 1200); // so the 3D tab opens quickly
       var strip = section('strip', { live: true, height: 96, load: function () { return call('staffSummary', { labId: S.lab }); }, html: function (s) {
         S.occ = s.occupancy;
         S.occPending = s.pending_inside;
@@ -1332,6 +1532,17 @@
           (can('handshake') ? section('handshake', { live: true, height: 300, load: function () { return call('handshake', { labId: S.lab }); }, html: htmlHandshake }) : '') + '</div>';
       } else if (v === 'activity') {
         body = section('activity', { live: true, height: 300, load: function () { return call('activity', { labId: S.lab }); }, html: htmlActivity });
+      } else if (v === 'boundary') {
+        // The map sits outside the live section so refreshing the counts never reloads it.
+        body = '<div class="grid lg:grid-cols-[1fr_19rem] gap-5 items-start"><div class="lp-bnd-map tall" id="bnd-view"><div class="lp-bnd-msg"><span><span class="lp-spin"></span> Loading the map…</span></div></div>' +
+          section('boundary', { live: true, height: 320, load: function () { return call('labBoundary', { labId: S.lab }); }, html: htmlBoundary }) + '</div>';
+      } else if (v === 'twin') {
+        body = '<div class="lp-twin" id="twin-host"><div class="lp-twin-msg" id="twin-msg"><span><span class="lp-spin"></span> Building the 3D lab…</span></div>' +
+          '<div class="lp-twin-bar"><form class="lp-twin-find" id="twin-find" role="search"><input name="q" placeholder="Find a register number…" autocomplete="off" aria-label="Find a register number"><button>Find</button></form>' +
+          '<span class="lp-twin-chip" id="twin-counts"></span><button type="button" class="lp-twin-chip" data-act="twin-home">Reset view</button></div>' +
+          '<div id="twin-card"></div>' +
+          '<div class="lp-twin-note">Each person stands at the system they chose at check-in and walks out of the door when GPS live mode says they left. Drag to turn · scroll to zoom · click a person.</div></div>';
+        setTimeout(startTwin, 0);
       } else if (v === 'map') {
         body = section('smap', { live: true, height: 300, load: function () { return call('labMap', { labId: S.lab }); }, html: htmlMap });
       } else {
@@ -1351,6 +1562,86 @@
       if (p.state === 'IN') return badge('green', 'In') + '<div class="text-xs text-slate-500 mt-1">seen ' + fmtTime(p.last_seen) + '</div>';
       if (p.state === 'OUT') return badge('red', 'Out') + '<div class="text-xs text-red-700 mt-1">left ' + fmtTime(p.out_since) + '</div>';
       return badge('gray', 'Not seen') + '<div class="text-xs text-slate-500 mt-1">since ' + fmtTime(p.last_seen) + '</div>';
+    }
+
+    /* ---------- virtual boundary (see Boundary.html) ---------- */
+    function startBoundaryEditor(lab) {
+      var host = document.getElementById('bnd-map');
+      if (!host || typeof LabBoundary === 'undefined' || host.dataset.ready) return;
+      host.dataset.ready = '1';
+      var input = document.getElementById('f-boundary');
+      LabBoundary.editor(host, {
+        lat: lab.lat, lng: lab.lng, radius: lab.radius_m, points: lab.boundary || [],
+        onChange: function (pts, area) {
+          if (input) input.value = JSON.stringify(pts);
+          var info = document.getElementById('bnd-info');
+          if (info) info.textContent = pts.length >= 3 ? pts.length + ' corners · ~' + Math.round(area) + ' m²' : pts.length ? pts.length + ' corner' + (pts.length > 1 ? 's' : '') + ' · need 3+' : 'No outline · circle in use';
+        }
+      }).then(function (ed) { S.bndEditor = ed; }, function () {});
+    }
+    function htmlBoundary(b) {
+      var p = b.presence || {};
+      var key = 'bnd:' + b.lab_id + ':' + JSON.stringify(b.boundary) + ':' + b.radius_m;
+      setTimeout(function () {
+        var host = document.getElementById('bnd-view');
+        if (host && typeof LabBoundary !== 'undefined' && host.dataset.key !== key) { host.dataset.key = key; LabBoundary.viewer(host, b).catch(function () {}); }
+      }, 0);
+      var reading = function (label, n, color) { return '<div class="lp-reading"><b style="color:' + color + '">' + esc(n || 0) + '</b><span>' + label + '</span></div>'; };
+      return card('Virtual boundary', '<div class="lp-readings">' + reading('In', p.in, '#121212') + reading('Out', p.out, '#c2362f') + reading('Not seen', p.not_seen, '#6b6a64') + '</div>' +
+          '<dl class="lp-spec mt-4"><dt>Shape</dt><dd>' + (b.shape === 'polygon' ? 'Drawn outline · ' + b.boundary.length + ' corners' : 'Circle · ' + b.radius_m + ' m radius') + '</dd>' +
+          '<dt>Area</dt><dd>~' + esc(b.area_m2) + ' m²</dd><dt>Checked</dt><dd>At check-in, then every minute while LabPulse is open</dd></dl>' +
+          (b.shape === 'polygon' ? '' : '<p class="text-xs text-amber-800 mt-3">No outline drawn yet: a circle around the centre also covers corridors and rooms next door.</p>') +
+          (can('saveLab') ? '<button class="lp-btn lp-btn-ghost lp-btn-sm mt-3" data-act="tab" data-tab="settings">' + (b.shape === 'polygon' ? 'Edit the outline' : 'Draw the lab outline') + '</button>' : ''),
+          '', { icon: 'map' });
+    }
+
+    /* ---------- 3D twin (see Twin.html) ---------- */
+    function startTwin() {
+      var host = document.getElementById('twin-host');
+      if (!host || typeof LabTwin === 'undefined' || LabTwin.mountedOn(host)) return;
+      setTimeout(function () {
+        var m = document.getElementById('twin-msg');
+        if (m) m.innerHTML = '<span><span class="lp-spin"></span> Loading the 3D engine… the first time can take a few seconds on a slow connection.</span>';
+      }, 5000);
+      LabTwin.mount(host, { onPick: showTwinCard, onCounts: paintTwinCounts }).then(function () {
+        var msg = document.getElementById('twin-msg');
+        if (msg) msg.parentNode.removeChild(msg);
+        loadTwin();
+        if (S.twinTimer) clearInterval(S.twinTimer);
+        S.twinTimer = setInterval(function () {
+          if (!document.getElementById('twin-host')) { clearInterval(S.twinTimer); S.twinTimer = null; return; }
+          if (!document.hidden) loadTwin();
+        }, Math.max(4000, Math.min(10000, (S.init && S.init.pollMs) || 8000)));
+      }, function (e) {
+        if (e.message === 'closed') return setTimeout(startTwin, 0); // the view was redrawn while loading: start on the new one
+        if (window.console) console.warn('3D view: ' + e.message);
+        var msg = document.getElementById('twin-msg');
+        if (msg) msg.innerHTML = '<span>' + esc(e.message) + '<br><span class="lp-twin-help">The Floor map tab shows the same lab in 2D.</span></span>';
+      });
+    }
+    function loadTwin() {
+      call('labTwin', { labId: S.lab }).then(function (d) { LabTwin.update(d); }, function () {});
+    }
+    function paintTwinCounts(c) {
+      var el = document.getElementById('twin-counts');
+      if (!el) return;
+      var dot = function (color) { return '<i style="background:' + color + '"></i>'; };
+      el.innerHTML = dot('#1f9d7a') + ((c.IN || 0) + (c.PENDING || 0) + (c.NOT_WATCHED || 0)) + ' in' +
+        ' &nbsp;' + dot('#dc3b3b') + (c.OUT || 0) + ' out' + ' &nbsp;' + dot('#8a877e') + (c.NOT_SEEN || 0) + ' not seen';
+    }
+    function twinStateText(p, s) {
+      if (s === 'OUT') return '<b style="color:#dc3b3b">Out of the lab</b> since ' + fmtTime(p.state_since);
+      if (s === 'NOT_SEEN') return '<b style="color:#6f6d66">Not seen</b> since ' + fmtTime(p.state_since) + ' (LabPulse closed or phone locked)';
+      if (s === 'PENDING') return '<b style="color:#c98a10">In the lab</b> · check-in awaiting review';
+      if (s === 'NOT_WATCHED') return '<b style="color:#3b6fd8">In the lab</b> · supervised entry (not tracked)';
+      return '<b style="color:#1f9d7a">In the lab</b>' + (p.state_since ? ' · seen ' + fmtTime(p.state_since) : '');
+    }
+    function showTwinCard(p, s) {
+      var el = document.getElementById('twin-card');
+      if (!el) return;
+      el.innerHTML = '<div class="lp-twin-card"><button type="button" class="x" data-act="twin-close" aria-label="Close">×</button>' +
+        '<b class="reg">' + esc(p.reg_no) + '</b> · ' + esc(p.name) + '<div class="mt-1">' + twinStateText(p, s) + '</div>' +
+        '<div class="text-slate-600 mt-1">System: ' + esc(p.system || 'Open bench') + (p.project ? '<br>Project: ' + esc(p.project) : '') + '<br>Checked in at ' + fmtTime(p.since) + '</div></div>';
     }
 
     function htmlInside(list) {
@@ -1511,6 +1802,14 @@
           '<div class="grid sm:grid-cols-2 gap-3">' + field('Lab ID', input('lab_id', lab.lab_id, 'required' + (lab.lab_id ? ' readonly' : ''))) + field('Lab name', input('name', lab.name, 'required')) + '</div>' +
           '<div class="grid sm:grid-cols-3 gap-3 items-end">' + field('Latitude', input('lat', lab.lat, 'inputmode="decimal" required id="f-lat"')) + field('Longitude', input('lng', lab.lng, 'inputmode="decimal" required id="f-lng"')) +
           '<button type="button" class="lp-btn lp-btn-ghost" data-act="use-location">Use my current location</button></div><p id="loc-help" class="text-xs text-slate-500">Stand in the centre of the lab and tap the button. Check the accuracy shown before saving.</p>' +
+          '<div class="rounded-xl border border-slate-200 p-3"><div class="flex flex-wrap items-start justify-between gap-2 mb-2"><div><div class="font-semibold">Virtual boundary</div>' +
+          '<p class="text-xs text-slate-500 max-w-xl">Click each corner of the lab on the map, or stand in each corner and tap <b>Add my location</b>. Drag a corner to adjust it. Check-in and GPS live mode use this outline; with no outline, the dashed circle is used.</p></div>' +
+          '<span class="lp-bnd-info" id="bnd-info"></span></div>' +
+          '<div class="lp-bnd-map" id="bnd-map"><div class="lp-bnd-msg"><span><span class="lp-spin"></span> Loading the map…</span></div></div>' +
+          '<div class="lp-bnd-tools"><button type="button" class="lp-btn lp-btn-ghost lp-btn-sm" data-act="bnd-here">' + icon('map') + 'Add my location as a corner</button>' +
+          '<button type="button" class="lp-btn lp-btn-ghost lp-btn-sm" data-act="bnd-undo">Undo last corner</button>' +
+          '<button type="button" class="lp-btn lp-btn-ghost lp-btn-sm" data-act="bnd-clear">Clear outline</button></div>' +
+          '<input type="hidden" name="boundary" id="f-boundary" value="' + esc(JSON.stringify(lab.boundary || [])) + '"></div>' +
           '<div class="grid sm:grid-cols-4 gap-3">' + field('Radius (m, ' + d.limits.radius.join('–') + ')', input('radius_m', lab.radius_m, 'type="number" min="' + d.limits.radius[0] + '" max="' + d.limits.radius[1] + '"')) +
           field('Opens', input('open_time', lab.open_time, 'type="time"')) + field('Closes', input('close_time', lab.close_time, 'type="time"')) + field('Open days', input('open_days', lab.open_days)) + '</div>' +
           '<div class="grid sm:grid-cols-4 gap-3">' + field('GPS accuracy limit (m)', input('accuracy_limit_m', lab.accuracy_limit_m, 'type="number"')) + field('Amber margin (m)', input('amber_margin_m', lab.amber_margin_m, 'type="number"')) +
@@ -1521,6 +1820,7 @@
           '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active"' + (lab.active !== false ? ' checked' : '') + '> Lab active</label>' +
           '<div class="flex gap-2"><button class="lp-btn lp-btn-primary">Save lab settings</button><button type="button" class="lp-btn lp-btn-ghost" data-act="new-lab">Add another lab</button></div></form>';
 
+        setTimeout(function () { startBoundaryEditor(lab); }, 0);
         var monitorHref = monitorUrl(lab.lab_id);
         var globalForm = '<form id="global-form" class="space-y-3">' +
           '<div class="grid sm:grid-cols-3 gap-3">' + field('Default loan (h)', input('default_loan_hours', g.default_loan_hours, 'type="number"')) + field('Max loan (h)', input('max_loan_hours', g.max_loan_hours, 'type="number"')) +
@@ -1615,6 +1915,40 @@
       'nav-close': function () { S.navOpen = false; var sh = document.getElementById('shell'); if (sh) sh.classList.remove('nav-open'); },
       'reload-today': function () { loadSection('today'); },
       'live-view': function (d) { S.liveView = d.view; render(); },
+      'sign-out': function () { signOut(); },
+      'theme': function () { setTheme(themeNow() === 'dark' ? 'light' : 'dark'); },
+      'bnd-undo': function () { if (S.bndEditor) S.bndEditor.undo(); },
+      'bnd-clear': function () { if (S.bndEditor) S.bndEditor.clear(); },
+      'bnd-here': function (d, el) {
+        if (!navigator.geolocation || !S.bndEditor) return toast('This browser cannot share location.', 'error');
+        el.disabled = true;
+        navigator.geolocation.getCurrentPosition(function (pos) {
+          el.disabled = false;
+          S.bndEditor.add(pos.coords.latitude, pos.coords.longitude);
+          var acc = Math.round(pos.coords.accuracy);
+          toast('Corner added (GPS ±' + acc + ' m).' + (acc > 15 ? ' Accuracy is poor: drag it into place on the map.' : ''), acc > 15 ? 'warn' : '');
+        }, function (e) { el.disabled = false; toast('Could not get your location: ' + e.message, 'error'); }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+      },
+      'twin-home': function () { if (typeof LabTwin !== 'undefined') LabTwin.home(); var c = document.getElementById('twin-card'); if (c) c.innerHTML = ''; },
+      'twin-close': function () { var c = document.getElementById('twin-card'); if (c) c.innerHTML = ''; },
+      'auth-back': function () { S.auth = null; S.authOther = true; render(); },
+      'auth-other': function () { S.authOther = true; render(); var i = document.querySelector('#auth-email [name=email]'); if (i) i.focus(); },
+      'auth-continue-as': function (d) { startCode(d.email); },
+      'dev-use': function (d) {
+        var i = document.querySelector('#auth-email [name=email]');
+        if (i) { i.value = d.email; i.focus(); } else { startCode(d.email); }
+      },
+      'auth-resend': function (d, el) {
+        el.disabled = true;
+        call('authStart', { email: S.auth.email }).then(function (r) {
+          S.auth.resendAt = Date.now() + r.resendInSec * 1000;
+          toast(r.sent ? 'New code sent to ' + r.masked + '.' : 'Your last code is still on its way. Try again in ' + r.resendInSec + ' s.');
+          fillCode('');
+          paintResend();
+          if (BOOT.dev) setTimeout(devInbox, 500);
+        }, function (e) { toast(e.message, 'error'); paintResend(); });
+      },
+      'dev-fill': function (d) { fillCode(d.code); },
       'cat-filter': function (d) { S.catFilter = d.cat; paintSection('catalog'); },
       'reload-sections': reloadVisible,
       'modal-close': closeModal,
@@ -1908,7 +2242,7 @@
       },
       'new-lab': function () {
         var cfg = S.sections.settings.cfg;
-        cfg.labs.push({ lab_id: '', name: '', lat: '', lng: '', radius_m: 20, open_time: '08:00', close_time: '20:00', open_days: 'MON,TUE,WED,THU,FRI,SAT', accuracy_limit_m: 30, amber_margin_m: 30, speed_flag_kmh: 25, speed_block_kmh: 200, qr_rotate_sec: 8, grace_min: 15, map_cols: 8, map_rows: 5, incharge_email: '', active: true });
+        cfg.labs.push({ lab_id: '', name: '', lat: '', lng: '', radius_m: 20, open_time: '08:00', close_time: '20:00', open_days: 'MON,TUE,WED,THU,FRI,SAT', accuracy_limit_m: 30, amber_margin_m: 30, speed_flag_kmh: 25, speed_block_kmh: 200, qr_rotate_sec: 30, grace_min: 15, map_cols: 8, map_rows: 5, incharge_email: '', active: true });
         S.lab = '';
         paintSection('settings');
       },
@@ -1984,6 +2318,18 @@
     });
 
     document.addEventListener('input', function (ev) {
+      var t = ev.target;
+      if (t.classList && t.classList.contains('lx-otp-box')) {
+        var digits = t.value.replace(/\D/g, '');
+        if (digits.length > 1) return fillCode(codeValue().slice(0, Number(t.dataset.i)) + digits); // autofill or fast typing
+        t.value = digits;
+        if (digits) {
+          var next = document.querySelector('.lx-otp-box[data-i="' + (Number(t.dataset.i) + 1) + '"]');
+          if (next) next.focus();
+          if (codeValue().length === 6) submitCode();
+        }
+        return;
+      }
       var bind = ev.target.getAttribute('data-bind');
       if (bind && S.checkin) {
         S.checkin.reason[bind] = ev.target.value;
@@ -2007,14 +2353,25 @@
       }, function () { info.textContent = ''; });
     }
 
+    document.addEventListener('paste', function (ev) {
+      var t = ev.target;
+      if (!(t.classList && t.classList.contains('lx-otp-box'))) return;
+      ev.preventDefault();
+      fillCode((ev.clipboardData || window.clipboardData).getData('text'));
+    });
+    document.addEventListener('keydown', function (ev) {
+      var t = ev.target;
+      if (!(t.classList && t.classList.contains('lx-otp-box'))) return;
+      var i = Number(t.dataset.i);
+      var go = function (j) { var b = document.querySelector('.lx-otp-box[data-i="' + j + '"]'); if (b) { b.focus(); b.select && b.select(); } };
+      if (ev.key === 'Backspace' && !t.value) { ev.preventDefault(); go(i - 1); var prev = document.querySelector('.lx-otp-box[data-i="' + (i - 1) + '"]'); if (prev) prev.value = ''; }
+      else if (ev.key === 'ArrowLeft') go(i - 1);
+      else if (ev.key === 'ArrowRight') go(i + 1);
+    });
+
     document.addEventListener('change', function (ev) {
       var t = ev.target;
       if (t.hasAttribute('data-schedule')) return showSchedule();
-      if (t.id === 'dev-pick') {
-        var em = document.querySelector('#auth-email [name=email]');
-        if (em && t.value) { em.value = t.value; em.focus(); }
-        return;
-      }
       if (t.id === 'lab-select') {
         S.lab = t.value;
         S.roster.sessionId = null;
@@ -2038,6 +2395,15 @@
       if (f.id === 'auth-email') {
         ev.preventDefault();
         submitEmail(f);
+      } else if (f.id === 'twin-find') {
+        ev.preventDefault();
+        var q = f.querySelector('[name=q]').value.trim();
+        var hit = typeof LabTwin !== 'undefined' ? LabTwin.find(q) : null;
+        if (hit) showTwinCard(hit.person, hit.state);
+        else if (q) toast('Nobody matching “' + q + '” is checked in right now.', 'warn');
+      } else if (f.id === 'auth-code') {
+        ev.preventDefault();
+        submitCode();
       } else if (f.id === 'lab-form') {
         ev.preventDefault();
         call('saveLab', formData(f)).then(function (lab) {
@@ -2114,14 +2480,35 @@
       refreshOcc();
     }
 
-    if (!S.init) {
+    function startApp() {
+      var acc = lastAccount();
+      if (getToken() && acc && S.init && S.init.me && acc.email === S.init.me.email && S.init.me.name && acc.name !== S.init.me.name) rememberAccount(acc.email, S.init.me.name);
+      afterInit();
+      if (!S._ticking) {
+        S._ticking = true;
+        setInterval(tick, Math.max(5000, Math.min(10000, S.init.pollMs || 8000)));
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+      }
+    }
+    function signedOutStart() {
       // No usable identity: public pages still work; dashboard links lead to the login page.
       if (!PUBLIC_PAGES[S.page]) S.page = 'login';
       render();
+    }
+
+    if (S.init) {
+      startApp();
+    } else if (getToken()) {
+      document.getElementById('app').innerHTML = '<div class="min-h-screen grid place-items-center text-sm text-slate-500"><span class="lp-spin"></span></div>';
+      call('bootstrap').then(function (init) {
+        S.init = init;
+        return claimHeldScan();
+      }).then(function () {
+        if (S.page === 'login' || S.page === 'signup') S.page = 'app';
+        startApp();
+      }, signedOutStart);
     } else {
-      afterInit();
-      setInterval(tick, Math.max(5000, Math.min(10000, S.init.pollMs || 8000)));
-      document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+      signedOutStart();
     }
   })();
 </script>

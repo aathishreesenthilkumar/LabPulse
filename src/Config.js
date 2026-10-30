@@ -14,10 +14,10 @@ var APP = {
 
   RADIUS_MIN_M: 15, // FR-07: 15–20 m configurable radius
   RADIUS_MAX_M: 20,
-  QR_ROTATE_MIN_SEC: 5, // FR-05: rotates every 5–10 seconds
-  QR_ROTATE_MAX_SEC: 10,
+  QR_ROTATE_MIN_SEC: 5, // FR-05 asked for 5–10 s; the lab chose 30 s so students have time to scan
+  QR_ROTATE_MAX_SEC: 60,
 
-  TOKEN_GRACE_WINDOWS: 2, // a QR is accepted for its own window plus this many previous ones
+  TOKEN_GRACE_WINDOWS: 1, // a QR is accepted for its own window plus this many previous ones (≤ 60 s at 30 s rotation)
   TICKET_TTL_SEC: 300, // time between a successful scan and submitting the check-in form
   REQUEST_ID_TTL_SEC: 900, // idempotency memory for retried requests
   LASTPOS_TTL_SEC: 21600, // travel-speed memory (stores a distance scalar, never coordinates)
@@ -104,10 +104,13 @@ var DAY_CODES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
  */
 var SHEETS = {
   Users: ['user_id', 'email', 'name', 'reg_no', 'mobile', 'role', 'active', 'created_at', 'updated_at'],
+  // Email-code sign-in: one row per signed-in device. Only a hash of the token is stored.
+  Sessions: ['session_id', 'token_hash', 'email', 'created_at', 'expires_at', 'revoked_at'],
   Config: [
     'lab_id', 'name', 'lat', 'lng', 'radius_m', 'open_time', 'close_time', 'open_days',
     'accuracy_limit_m', 'amber_margin_m', 'speed_flag_kmh', 'speed_block_kmh', 'qr_rotate_sec',
-    'grace_min', 'incharge_email', 'map_cols', 'map_rows', 'active', 'updated_at'
+    'grace_min', 'incharge_email', 'map_cols', 'map_rows', 'active', 'updated_at',
+    'boundary' // virtual boundary: JSON list of [lat, lng] corners drawn around the room; empty = use the circle
   ],
   CoursesEvents: [
     'id', 'lab_id', 'type', 'code', 'name', 'coordinator_email', 'coordinator_name', 'days',

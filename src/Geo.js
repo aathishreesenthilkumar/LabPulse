@@ -17,6 +17,63 @@ var Geo = {
     return 2 * Geo.EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(a)));
   },
 
+  /** Metres east (x) and north (y) of an origin. Equirectangular: well under 1 % error across a building. */
+  toXY: function (lat, lng, lat0, lng0) {
+    var rad = Math.PI / 180;
+    return { x: (lng - lng0) * rad * Geo.EARTH_RADIUS_M * Math.cos(lat0 * rad), y: (lat - lat0) * rad * Geo.EARTH_RADIUS_M };
+  },
+
+  polygonXY: function (lab) {
+    return lab.boundary.map(function (p) { return Geo.toXY(p[0], p[1], lab.lat, lab.lng); });
+  },
+
+  /** Ray casting: is the point inside the polygon? */
+  insidePolygon: function (pt, poly) {
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var a = poly[i], b = poly[j];
+      if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  },
+
+  /** Shortest distance (m) from the point to any edge of the polygon. */
+  edgeDistance: function (pt, poly) {
+    var best = Infinity;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var a = poly[j], b = poly[i];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var len2 = dx * dx + dy * dy;
+      var t = len2 ? Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2)) : 0;
+      var ex = a.x + t * dx - pt.x, ey = a.y + t * dy - pt.y;
+      best = Math.min(best, Math.sqrt(ex * ex + ey * ey));
+    }
+    return best;
+  },
+
+  /** Area in m² (shoelace formula). */
+  areaM2: function (poly) {
+    var s = 0;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) s += (poly[j].x + poly[i].x) * (poly[j].y - poly[i].y);
+    return Math.abs(s / 2);
+  },
+
+  /**
+   * Where a fix sits against the lab's virtual boundary: the drawn outline of the room when
+   * there is one, otherwise the circle (radius around the centre).
+   * @return {inside, outside_m (0 when inside), shape: 'polygon' | 'circle', centre_m}
+   */
+  place: function (lab, lat, lng) {
+    var centre = Geo.haversine(lat, lng, lab.lat, lab.lng);
+    if (lab.boundary && lab.boundary.length >= 3) {
+      var pt = Geo.toXY(lat, lng, lab.lat, lab.lng);
+      var poly = Geo.polygonXY(lab);
+      var inside = Geo.insidePolygon(pt, poly);
+      return { inside: inside, outside_m: inside ? 0 : Geo.edgeDistance(pt, poly), shape: 'polygon', centre_m: centre };
+    }
+    return { inside: centre <= lab.radius_m, outside_m: Math.max(0, centre - lab.radius_m), shape: 'circle', centre_m: centre };
+  },
+
   /**
    * Lower bound on how far someone moved between two fixes, knowing only each fix's
    * distance from a lab centre (no stored coordinates needed):
@@ -47,12 +104,17 @@ var Geo = {
     var acc = Number(loc.accuracy);
     var accKnown = isFinite(acc) && acc >= 0;
 
-    // Step 6: distance from the lab centre.
-    var d = Geo.haversine(lat, lng, lab.lat, lab.lng);
-    var inside = d <= lab.radius_m;
+    // Step 6: inside the virtual boundary (drawn outline, or the circle when none is drawn)?
+    var place = Geo.place(lab, lat, lng);
+    var d = place.centre_m;
+    var inside = place.inside;
     if (!inside) {
       var margin = Math.min(accKnown ? acc : 0, lab.amber_margin_m);
-      if (d <= lab.radius_m + margin) amber.push('Just outside the lab radius (' + Math.round(d) + ' m), within GPS uncertainty');
+      var near = place.outside_m <= margin;
+      if (place.shape === 'polygon') {
+        if (near) amber.push('Just outside the lab boundary (' + Math.round(place.outside_m) + ' m), within GPS uncertainty');
+        else red.push('Outside the lab: about ' + Math.round(place.outside_m) + ' m outside the lab boundary');
+      } else if (near) amber.push('Just outside the lab radius (' + Math.round(d) + ' m), within GPS uncertainty');
       else red.push('Outside the lab: about ' + Math.round(d) + ' m from the lab centre');
     }
 
@@ -81,6 +143,6 @@ var Geo = {
     if (isFinite(age) && age > 120000) amber.push('Location fix was more than 2 minutes old');
 
     var level = red.length ? STATUS.CONF.RED : amber.length ? STATUS.CONF.AMBER : STATUS.CONF.GREEN;
-    return { level: level, inside: inside, distance: d, reasons: red.concat(amber) };
+    return { level: level, inside: inside, distance: d, outside_m: place.outside_m, reasons: red.concat(amber) };
   }
 };

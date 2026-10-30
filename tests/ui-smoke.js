@@ -356,6 +356,32 @@ async function test(name, fn) {
     assert.deepStrictEqual(p.errors, []);
   });
 
+  await test('night theme: switch in the top-right of every screen, remembered, and back again', async () => {
+    const env = world();
+    const anon = page('Index.html', { view: 'landing', webAppUrl: 'https://script.google.com/macros/s/TEST/exec' }, env, '');
+    await settle();
+    const html = () => anon.doc.documentElement.getAttribute('data-theme');
+    assert.strictEqual(html(), 'light', 'starts light (no saved choice, no dark device setting)');
+    assert.ok(anon.doc.querySelector('[data-slot="nav-cta"] .lp-theme'), 'switch in the home page nav');
+    click(anon, '[data-slot="nav-cta"] .lp-theme');
+    assert.strictEqual(html(), 'dark');
+    assert.strictEqual(anon.win.localStorage.getItem('labpulse.theme'), 'dark', 'choice is remembered');
+    assert.strictEqual(anon.doc.querySelector('.lp-theme').getAttribute('aria-pressed'), 'true');
+    assert.match(anon.doc.querySelector('.lp-theme').getAttribute('aria-label'), /day theme/);
+    click(anon, '[data-slot="nav-cta"] [data-page="login"]');
+    assert.ok(anon.doc.querySelector('.lx-auth-top .lp-theme'), 'switch on the sign-in page');
+    click(anon, '.lx-auth-top .lp-theme');
+    assert.strictEqual(html(), 'light', 'and back to day');
+    assertClean(anon, 'theme on public pages');
+
+    const staff = page('Index.html', bootFor(env, 'staff@karunya.edu'), env, 'staff@karunya.edu');
+    await settle();
+    assert.ok(staff.doc.querySelector('.lp-top .lp-theme'), 'switch in the dashboard header');
+    click(staff, '.lp-top .lp-theme');
+    assert.strictEqual(staff.doc.documentElement.getAttribute('data-theme'), 'dark');
+    assertClean(staff, 'theme on the dashboard');
+  });
+
   await test('landing page: visitors see Log in / Sign up, members see Open dashboard', async () => {
     const env = world();
     const anon = page('Index.html', { view: 'landing', webAppUrl: 'https://script.google.com/macros/s/TEST/exec' }, env, '');
@@ -367,11 +393,16 @@ async function test(name, fn) {
     assert.ok(anon.doc.querySelector('[data-slot="hero-cta"] [data-act="go"][data-page="signup"]'), 'Sign up in the hero');
     assert.strictEqual(anon.doc.querySelectorAll('[data-slot="qr"] rect').length > 200, true, 'hero QR drawn');
     click(anon, '[data-slot="nav-cta"] [data-page="login"]');
-    assert.match(anon.doc.body.textContent, /Log in to LabPulse[\s\S]*Karunya email[\s\S]*Continue/);
+    assert.match(anon.doc.body.textContent, /Sign in to LabPulse[\s\S]*First time here\? The same step sets up your account[\s\S]*College email[\s\S]*Continue with email/);
+    assert.match(anon.doc.body.textContent, /No password[\s\S]*Karunya emails only/, 'trust line');
     assert.ok(anon.doc.querySelector('#auth-email [name=email]'), 'email box on the log-in page');
     assert.ok(!anon.doc.querySelector('.lx-auth-side'), 'no dark side panel');
-    click(anon, '.lx-switch [data-page="signup"]');
-    assert.match(anon.doc.body.textContent, /Create your account\.[\s\S]*Step 1 of 2/);
+    assert.ok(!/Back to site/.test(anon.doc.body.textContent), 'no link back to an explainer page');
+    // Opening the app with no page chosen goes straight to sign-in.
+    const direct = page('Index.html', { view: 'app', webAppUrl: 'https://script.google.com/macros/s/TEST/exec' }, env, '');
+    await settle();
+    assert.match(direct.doc.body.textContent, /Sign in to LabPulse/);
+    assert.ok(!direct.doc.querySelector('.lx-hero'), 'no explainer page');
     assertClean(anon, 'anonymous landing');
 
     const member = page('Index.html', bootFor(env, 's1@karunya.edu.in', { view: 'landing' }), env, 's1@karunya.edu.in');
@@ -407,11 +438,11 @@ async function test(name, fn) {
     const email = 'newbie@karunya.edu.in';
     const p = page('Index.html', bootFor(env, email), env, email);
     await settle();
-    assert.match(p.doc.body.textContent, /Create your account\.[\s\S]*Step 2 of 2/);
+    assert.match(p.doc.body.textContent, /Almost done\.[\s\S]*Two details/);
     const f = p.doc.getElementById('reg-form');
     f.querySelector('[name=name]').value = 'New Student';
     f.querySelector('[name=reg_no]').value = 'URK24CS1500';
-    f.querySelector('[name=mobile]').value = '9876543210';
+    assert.ok(!f.querySelector('[name=mobile]'), 'no mobile number is asked for');
     f.dispatchEvent(new p.win.Event('submit', { cancelable: true }));
     await settle();
     assert.match(p.doc.body.textContent, /Not checked in/);

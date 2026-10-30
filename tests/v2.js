@@ -5,7 +5,7 @@
  */
 'use strict';
 const assert = require('assert');
-const { INSIDE, EDGE, HOSTEL, world, scan, checkIn, auditActions } = require('./fixtures');
+const { LAB, INSIDE, EDGE, HOSTEL, world, scan, checkIn, auditActions } = require('./fixtures');
 
 const results = [];
 function test(name, fn) {
@@ -517,6 +517,217 @@ test('Live mode: manual entries are not watched; turning the setting off stops i
   assert.strictEqual(env.run('jobAutoClose()').left_during_session, 0);
   assert.strictEqual(rowFor(env, 's2@karunya.edu.in').presence.state, 'NOT_WATCHED');
   assert.ok(!admin('saveGlobal', { presence_ping_sec: 60, presence_not_seen_min: 1 }).ok, 'Not seen must allow two missed pings');
+});
+
+/* ---------------- Email-code sign-in ---------------- */
+
+const anon = (env) => (action, payload) => env.as('')(action, payload);
+const lastCode = (env, to) => {
+  const m = env.mail.filter((x) => x.to === to).slice(-1)[0];
+  return m ? (m.subject.match(/\d{6}/) || [''])[0] : '';
+};
+function signIn(env, email) {
+  assert.ok(anon(env)('authStart', { email }).ok);
+  const r = anon(env)('authVerify', { email, code: lastCode(env, email) });
+  assert.ok(r.ok, JSON.stringify(r));
+  return r.data.token;
+}
+
+test('Sign-in code: emailed from LabPulse with the code in the subject; only Karunya emails', () => {
+  const env = world();
+  const r = anon(env)('authStart', { email: '  URK24CS7777@karunya.edu.in ' });
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.strictEqual(r.data.newUser, true);
+  assert.match(r.data.masked, /^ur•••7@karunya\.edu\.in$/);
+  const m = env.mail.slice(-1)[0];
+  assert.strictEqual(m.to, 'urk24cs7777@karunya.edu.in');
+  assert.match(m.subject, /^\d{6} is your LabPulse code$/);
+  assert.strictEqual(m.opts.name, 'LabPulse');
+  assert.match(m.opts.htmlBody, /expires in 10 minutes/);
+  assert.strictEqual(anon(env)('authStart', { email: 'someone@gmail.com' }).code, 'DOMAIN');
+  assert.strictEqual(anon(env)('authStart', { email: 'not-an-email' }).code, 'INVALID');
+  const dump = JSON.stringify(env.rows('AuditLog')) + JSON.stringify(env.rows('Sessions'));
+  assert.ok(!dump.includes(lastCode(env, 'urk24cs7777@karunya.edu.in')), 'the code is never written to a sheet');
+});
+
+test('Sign-in code: resend waits a minute, at most 5 an hour', () => {
+  const env = world();
+  const email = 'urk24cs7777@karunya.edu.in';
+  assert.ok(anon(env)('authStart', { email }).ok);
+  const again = anon(env)('authStart', { email });
+  assert.strictEqual(again.data.sent, false, 'within a minute: no second email, back to the code screen');
+  assert.strictEqual(env.mail.filter((m) => m.to === email).length, 1);
+  for (let i = 0; i < 4; i++) { env.advance(61); assert.ok(anon(env)('authStart', { email }).ok, 'send ' + (i + 2)); }
+  env.advance(61);
+  const r = anon(env)('authStart', { email });
+  assert.strictEqual(r.code, 'RATE');
+  assert.match(r.message, /hour/);
+  const first = lastCode(env, email);
+  assert.ok(anon(env)('authVerify', { email, code: first }).ok, 'the newest code still works');
+});
+
+test('Sign-in code: wrong codes count down and lock; codes expire after 10 minutes', () => {
+  const env = world();
+  const email = 's1@karunya.edu.in';
+  anon(env)('authStart', { email });
+  const good = lastCode(env, email);
+  const bad = good === '000000' ? '111111' : '000000';
+  let r = anon(env)('authVerify', { email, code: bad });
+  assert.strictEqual(r.code, 'CODE_WRONG');
+  assert.match(r.message, /4 tries left/);
+  for (let i = 0; i < 3; i++) anon(env)('authVerify', { email, code: bad });
+  r = anon(env)('authVerify', { email, code: bad });
+  assert.strictEqual(r.code, 'CODE_LOCKED');
+  assert.strictEqual(anon(env)('authVerify', { email, code: good }).code, 'CODE_EXPIRED', 'locked code is gone');
+  assert.ok(auditActions(env).includes('SECURITY_OTP_LOCKED'));
+  env.advance(61);
+  anon(env)('authStart', { email });
+  const later = lastCode(env, email);
+  env.advance(601);
+  assert.strictEqual(anon(env)('authVerify', { email, code: later }).code, 'CODE_EXPIRED');
+});
+
+test('Sign-in code: the session identifies the person, survives reloads, and sign-out ends it', () => {
+  const env = world();
+  const token = signIn(env, 's1@karunya.edu.in');
+  assert.match(token, /^[a-f0-9]{64}$/);
+  const sessions = env.rows('Sessions');
+  assert.strictEqual(sessions.length, 2, 'one session row');
+  assert.ok(!JSON.stringify(sessions).includes(token), 'only a hash of the token is stored');
+  const me = anon(env)('bootstrap', { __s: token });
+  assert.ok(me.ok, JSON.stringify(me));
+  assert.strictEqual(me.data.me.email, 's1@karunya.edu.in');
+  assert.strictEqual(me.data.me.role, 'STUDENT');
+  // the token is only proof of identity; it is not passed on to the action
+  assert.ok(anon(env)('myHistory', { __s: token }).ok);
+  assert.strictEqual(anon(env)('bootstrap', { __s: 'f'.repeat(64) }).code, 'SESSION_EXPIRED');
+  assert.strictEqual(anon(env)('bootstrap', {}).code, 'NO_IDENTITY');
+  assert.ok(anon(env)('authSignOut', { __s: token }).ok);
+  assert.strictEqual(anon(env)('bootstrap', { __s: token }).code, 'SESSION_EXPIRED');
+  assert.ok(auditActions(env).includes('LOGIN_OTP'));
+});
+
+test('Sign-in code: a brand-new email signs up, registers and checks in by QR scanned before signing in', () => {
+  const env = world();
+  const email = 'urk24cs7777@karunya.edu.in';
+  // Phone scans the QR before signing in: the scan is held as a pass.
+  const tick = env.as('staff@karunya.edu')('monitorTick', { labId: 'AIIOT' });
+  env.session.active = '';
+  env.ctx.Db.reset();
+  const page = env.ctx.doGet({ parameter: { t: tick.data.token } });
+  assert.strictEqual(page.boot.view, 'checkin');
+  assert.ok(!page.boot.init, 'nobody identified yet');
+  assert.strictEqual(page.boot.pass.ok, true);
+  env.session.active = '';
+  env.ctx.Db.reset();
+  assert.strictEqual(env.ctx.doGet({ parameter: { t: tick.data.token } }).boot.pass.code, 'QR_REUSED', 'one scan, one pass');
+
+  const token = signIn(env, email);
+  const call = (a, p) => anon(env)(a, Object.assign({ __s: token }, p || {}));
+  assert.strictEqual(call('bootstrap').data.me.registered, false);
+  assert.ok(call('register', { name: 'New Student', reg_no: 'URK24CS7777', mobile: '9876543210' }).ok);
+  const claim = call('claimPass', { pass: page.boot.pass.pass });
+  assert.strictEqual(claim.data.ok, true, JSON.stringify(claim));
+  assert.strictEqual(call('claimPass', { pass: page.boot.pass.pass }).data.ok, false, 'a pass is used once');
+  const r = call('checkIn', { labId: 'AIIOT', lat: INSIDE.lat, lng: INSIDE.lng, accuracy: INSIDE.accuracy, reason: { type: 'COURSE', sessionId: 'C-23CS2048' } });
+  assert.ok(r.ok && r.data.outcome === 'GREEN', JSON.stringify(r));
+  // The wall monitor works with a staff session too.
+  const staffToken = signIn(env, 'staff@karunya.edu');
+  env.session.active = '';
+  env.ctx.Db.reset();
+  const mon = env.ctx.doGet({ parameter: { view: 'monitor', lab: 'AIIOT' } });
+  assert.strictEqual(mon.file, 'Monitor');
+  assert.ok(anon(env)('monitorTick', { labId: 'AIIOT', __s: staffToken }).ok);
+  assert.strictEqual(anon(env)('monitorTick', { labId: 'AIIOT', __s: token }).code, 'FORBIDDEN', 'a student session cannot run the monitor');
+});
+
+test('3D twin: room, placed desks and every person with seat and live state; HOD can see it, students cannot', () => {
+  const env = world();
+  scan(env, 's1@karunya.edu.in');
+  checkIn(env, 's1@karunya.edu.in', INSIDE, { type: 'RESEARCH', purpose: 'Sensor calibration', equipment: 'None', projectId: 'P-S1', systemId: 'PC-02' });
+  scan(env, 's2@karunya.edu.in');
+  checkIn(env, 's2@karunya.edu.in', INSIDE, { type: 'RESEARCH', purpose: 'Drone mapping', equipment: 'None', projectId: 'P-S2' });
+  env.advance(60); env.as('s2@karunya.edu.in')('presencePing', { lat: HOSTEL.lat, lng: HOSTEL.lng, accuracy: 10 });
+  env.advance(60); env.as('s2@karunya.edu.in')('presencePing', { lat: HOSTEL.lat, lng: HOSTEL.lng, accuracy: 10 });
+  const r = env.as('hod@karunya.edu')('labTwin', { labId: 'AIIOT' });
+  assert.ok(r.ok, JSON.stringify(r));
+  const d = r.data;
+  assert.ok(d.cols > 0 && d.rows > 0);
+  assert.ok(d.assets.length > 5 && d.assets.every((a) => Number.isFinite(a.x) && Number.isFinite(a.y)));
+  assert.strictEqual(d.assets.filter((a) => a.asset_id === 'PC-02')[0].status, 'IN_USE');
+  const s1 = d.people.filter((p) => p.reg_no === 'URK24CS1001')[0];
+  const s2 = d.people.filter((p) => p.reg_no === 'URK24CS1002')[0];
+  assert.strictEqual(s1.system_id, 'PC-02');
+  assert.strictEqual(s1.state, 'IN');
+  assert.strictEqual(s2.state, 'OUT');
+  assert.ok(s2.state_since > 0);
+  assert.ok(!JSON.stringify(d).includes('mobile') && !JSON.stringify(d).includes(String(HOSTEL.lat)), 'no phone numbers or coordinates');
+  assert.strictEqual(env.as('s1@karunya.edu.in')('labTwin', { labId: 'AIIOT' }).code, 'FORBIDDEN');
+});
+
+/* ---------------- Virtual boundary: the drawn outline of the room ---------------- */
+
+// A 20 m × 12 m room centred on the lab: corners as [lat, lng].
+const M_LAT = 1 / 111195;
+const M_LNG = 1 / (111195 * Math.cos(LAB.lat * Math.PI / 180));
+const spot = (eastM, northM, acc) => ({ lat: LAB.lat + northM * M_LAT, lng: LAB.lng + eastM * M_LNG, accuracy: acc || 5 });
+const ROOM = [[-10, -6], [10, -6], [10, 6], [-10, 6]].map(([e, n]) => { const p = spot(e, n); return [p.lat, p.lng]; });
+function drawRoom(env) {
+  const admin = env.as('admin@karunya.edu');
+  const cur = admin('settingsGet').data.labs.filter((l) => l.lab_id === 'AIIOT')[0];
+  const r = admin('saveLab', Object.assign({}, cur, { boundary: JSON.stringify(ROOM) }));
+  assert.ok(r.ok, JSON.stringify(r));
+  return r.data;
+}
+
+test('Virtual boundary: the drawn room outline decides inside/outside, not the 20 m circle', () => {
+  const env = world();
+  const saved = drawRoom(env);
+  assert.strictEqual(saved.boundary.length, 4);
+  assert.ok(Math.abs(saved.lat - LAB.lat) < 1e-5 && Math.abs(saved.lng - LAB.lng) < 1e-5, 'centre follows the outline');
+  const ev = (p) => env.run(`Geo.evaluate(Settings.lab('AIIOT'), ${JSON.stringify(p)}, null, null, U.now().getTime())`);
+  assert.strictEqual(ev(spot(8, 4)).level, 'GREEN', 'inside the room');
+  const corridor = ev(spot(0, 15, 5)); // 15 m north: inside the old 20 m circle, but 9 m outside the room
+  assert.strictEqual(corridor.level, 'RED', JSON.stringify(corridor));
+  assert.match(corridor.reasons[0], /9 m outside the lab boundary/);
+  const nearWall = ev(spot(0, 8, 8)); // 2 m outside the wall, GPS ±8 m
+  assert.strictEqual(nearWall.level, 'AMBER');
+  assert.match(nearWall.reasons[0], /Just outside the lab boundary/);
+  assert.strictEqual(ev(HOSTEL).level, 'RED');
+  // The real check-in uses it too.
+  scan(env, 's1@karunya.edu.in');
+  assert.strictEqual(checkIn(env, 's1@karunya.edu.in', spot(0, 15, 5)).data.outcome, 'RED');
+  scan(env, 's2@karunya.edu.in');
+  assert.strictEqual(checkIn(env, 's2@karunya.edu.in', spot(-6, -3, 6)).data.outcome, 'GREEN');
+});
+
+test('Virtual boundary: GPS live mode marks someone in the corridor as Out', () => {
+  const env = world();
+  drawRoom(env);
+  scan(env, 's2@karunya.edu.in');
+  checkIn(env, 's2@karunya.edu.in', spot(0, 0), { type: 'RESEARCH', purpose: 'Thesis experiments', equipment: 'None', projectId: 'P-S2' });
+  const ping = (p) => env.as('s2@karunya.edu.in')('presencePing', { lat: p.lat, lng: p.lng, accuracy: p.accuracy, posAgeMs: 1000 }).data;
+  env.advance(60); assert.strictEqual(ping(spot(5, 2)).state, 'IN');
+  env.advance(60); ping(spot(0, 16, 5));
+  env.advance(60); assert.strictEqual(ping(spot(0, 16, 5)).state, 'OUT', 'corridor 10 m outside the room');
+  const b = env.as('staff@karunya.edu')('labBoundary', { labId: 'AIIOT' }).data;
+  assert.strictEqual(b.shape, 'polygon');
+  assert.ok(Math.abs(b.area_m2 - 240) < 3, 'area ' + b.area_m2);
+  assert.strictEqual(b.presence.out, 1);
+  assert.strictEqual(env.as('s1@karunya.edu.in')('labBoundary', { labId: 'AIIOT' }).code, 'FORBIDDEN');
+});
+
+test('Virtual boundary: validation, and clearing it goes back to the circle', () => {
+  const env = world();
+  const admin = env.as('admin@karunya.edu');
+  const cur = admin('settingsGet').data.labs[0];
+  assert.match(admin('saveLab', Object.assign({}, cur, { boundary: JSON.stringify(ROOM.slice(0, 2)) })).message, /at least 3 corners/);
+  const far = ROOM.slice(0, 3).concat([[LAB.lat + 0.05, LAB.lng]]);
+  assert.match(admin('saveLab', Object.assign({}, cur, { boundary: JSON.stringify(far) })).message, /within 1 km/);
+  drawRoom(env);
+  assert.ok(admin('saveLab', Object.assign({}, admin('settingsGet').data.labs[0], { boundary: '' })).ok);
+  assert.strictEqual(env.as('staff@karunya.edu')('labBoundary', { labId: 'AIIOT' }).data.shape, 'circle');
+  assert.ok(auditActions(env).includes('SETTINGS_LAB'));
 });
 
 /* ------------------------------------------------------------------ */

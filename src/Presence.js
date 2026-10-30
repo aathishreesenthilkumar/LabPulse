@@ -84,7 +84,7 @@ var Presence = {
       var accOk = isFinite(acc) && acc > 0 && acc <= lab.accuracy_limit_m;
       // Same tolerance as check-in: within the radius plus the GPS uncertainty margin counts as inside.
       var slack = Math.min(isFinite(acc) ? acc : 0, lab.amber_margin_m);
-      if (ev.distance <= lab.radius_m + slack) reading = 'INSIDE';
+      if (ev.outside_m <= slack) reading = 'INSIDE'; // inside the virtual boundary, or within GPS uncertainty of it
       else reading = accOk ? 'OUTSIDE' : 'WEAK'; // a fuzzy fix never marks someone out
     }
 

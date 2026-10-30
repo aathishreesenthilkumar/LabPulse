@@ -6,36 +6,56 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LabPulse Monitor</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <style>
-      * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; background: #0b1220; color: #e2e8f0; font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
-      .wrap { min-height: 100%; display: grid; grid-template-rows: auto 1fr auto; padding: 3vmin 4vmin; gap: 2vmin; }
-      header { display: flex; align-items: center; justify-content: space-between; gap: 2vmin; }
-      .brand { display: flex; align-items: center; gap: 1.5vmin; }
-      .logo { width: 6vmin; height: 6vmin; border-radius: 1.4vmin; background: #0f766e; display: grid; place-items: center; font-weight: 900; font-size: 3.4vmin; color: #fff; }
-      .lab { font-size: 4vmin; font-weight: 800; }
-      .sub { font-size: 2vmin; color: #94a3b8; }
-      .status { display: flex; align-items: center; gap: 1vmin; font-size: 2.4vmin; font-weight: 700; padding: 0.8vmin 2vmin; border-radius: 99px; }
-      .status::before { content: ''; width: 1.6vmin; height: 1.6vmin; border-radius: 99px; background: currentColor; }
-      .online { background: #052e2b; color: #5eead4; }
-      .offline { background: #3f1d1d; color: #fca5a5; }
-      main { display: grid; grid-template-columns: auto minmax(0, 22rem); align-items: center; justify-content: center; gap: 6vmin; }
-      .qrbox { position: relative; background: #fff; padding: 3vmin; border-radius: 3vmin; box-shadow: 0 0 0 1vmin rgba(94, 234, 212, 0.15); }
-      #qr { width: 62vmin; height: 62vmin; }
+      /* Wall screen in the "instrument panel" style: night background, bracketed mono labels, CAD corners. */
+      * { box-sizing: border-box; scrollbar-width: none; -ms-overflow-style: none; }
+      *::-webkit-scrollbar { width: 0; height: 0; display: none; }
+      :root { --night: #0f1412; --ink: #e8efeb; --muted: #7d8c85; --rule: #24302b; --signal: #7ee2c3; --red: #f87171; }
+      html, body { margin: 0; height: 100%; background: var(--night); color: var(--ink); font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; }
+      body { background-image: radial-gradient(circle at 1px 1px, rgba(126, 226, 195, 0.07) 1px, transparent 0); background-size: 3.2vmin 3.2vmin; }
+      .mono { font-family: 'Geist Mono', ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; }
+      .wrap { min-height: 100%; display: grid; grid-template-rows: auto 1fr auto; padding: 3vmin 4.5vmin; gap: 2vmin; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 2vmin; padding-bottom: 2vmin; border-bottom: 1px solid var(--rule); }
+      .brand { display: flex; align-items: center; gap: 1.8vmin; }
+      .logo { width: 6vmin; height: 6vmin; border-radius: 1.4vmin; background: #121212; border: 1px solid var(--rule); display: grid; place-items: center; }
+      .logo svg { width: 60%; height: 60%; }
+      .lab { font-size: 3.8vmin; font-weight: 650; letter-spacing: -0.02em; }
+      .sub { font-size: 1.7vmin; color: var(--muted); margin-top: 0.4vmin; }
+      .right { display: flex; align-items: center; gap: 3vmin; }
+      .clock { font-size: 2.6vmin; color: var(--ink); }
+      .status { display: flex; align-items: center; gap: 1vmin; font-size: 1.8vmin; font-weight: 600; padding: 0.8vmin 1.8vmin; border-radius: 99px; border: 1px solid currentColor; font-family: 'Geist Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+      .status::before { content: ''; width: 1.3vmin; height: 1.3vmin; border-radius: 99px; background: currentColor; }
+      .online { color: var(--signal); }
+      .online::before { animation: blink 1.6s ease-in-out infinite; }
+      .offline { color: var(--red); }
+      @keyframes blink { 50% { opacity: 0.25; } }
+      main { display: grid; grid-template-columns: auto minmax(0, 26rem); align-items: center; justify-content: center; gap: 7vmin; }
+      .qrbox { position: relative; background: #fff; padding: 3vmin; border-radius: 2vmin; }
+      .qrbox::before, .qrbox::after { content: ''; position: absolute; width: 5vmin; height: 5vmin; border: 0 solid var(--signal); }
+      .qrbox::before { top: -2.2vmin; left: -2.2vmin; border-width: 0.35vmin 0 0 0.35vmin; }
+      .qrbox::after { bottom: -2.2vmin; right: -2.2vmin; border-width: 0 0.35vmin 0.35vmin 0; }
+      #qr { width: 60vmin; height: 60vmin; }
       #qr img, #qr canvas { width: 100% !important; height: 100% !important; image-rendering: pixelated; }
-      .veil { position: absolute; inset: 0; border-radius: 3vmin; background: rgba(11, 18, 32, 0.92); display: none; place-items: center; text-align: center; padding: 4vmin; font-size: 3.2vmin; font-weight: 700; color: #fca5a5; }
-      .side { display: flex; flex-direction: column; gap: 4vmin; }
-      .stat .label { font-size: 2.2vmin; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
-      .stat .value { font-size: 12vmin; font-weight: 900; line-height: 1; color: #f8fafc; }
-      .ring { display: flex; align-items: center; gap: 2vmin; font-size: 2.4vmin; color: #94a3b8; }
-      .ring svg { width: 9vmin; height: 9vmin; transform: rotate(-90deg); }
-      .ring circle { fill: none; stroke-width: 10; }
-      .steps { font-size: 2.3vmin; color: #cbd5e1; line-height: 1.6; margin: 0; padding-left: 3vmin; }
-      footer { text-align: center; font-size: 1.8vmin; color: #64748b; }
+      .veil { position: absolute; inset: 0; border-radius: 2vmin; background: rgba(15, 20, 18, 0.94); display: none; place-items: center; text-align: center; padding: 4vmin; font-size: 3vmin; font-weight: 600; color: var(--red); }
+      .side { display: flex; flex-direction: column; gap: 3.6vmin; }
+      .label { font-size: 1.7vmin; color: var(--muted); }
+      .label::before { content: '[ '; } .label::after { content: ' ]'; }
+      .stat .value { font-size: 15vmin; font-weight: 600; line-height: 0.95; letter-spacing: -0.04em; color: #fff; margin-top: 1vmin; font-variant-numeric: tabular-nums; }
+      .stat .sub { font-size: 1.9vmin; color: #f2c46d; }
+      .ring { display: flex; align-items: center; gap: 2vmin; }
+      .ring svg { width: 8vmin; height: 8vmin; transform: rotate(-90deg); flex: none; }
+      .ring circle { fill: none; stroke-width: 8; }
+      .ring-text { font-size: 2.2vmin; color: var(--ink); }
+      .spec { display: grid; grid-template-columns: auto 1fr; gap: 1.1vmin 2.4vmin; margin: 0; padding-top: 2.6vmin; border-top: 1px solid var(--rule); font-size: 1.9vmin; }
+      .spec dt { color: var(--muted); }
+      .spec dd { margin: 0; color: var(--ink); }
+      footer { display: flex; justify-content: space-between; gap: 2vmin; font-size: 1.6vmin; color: var(--muted); padding-top: 2vmin; border-top: 1px solid var(--rule); }
       @media (orientation: portrait) {
         main { grid-template-columns: 1fr; justify-items: center; }
-        #qr { width: 78vmin; height: 78vmin; }
-        .side { flex-direction: row; flex-wrap: wrap; justify-content: center; text-align: center; }
+        #qr { width: 74vmin; height: 74vmin; }
+        .side { width: 74vmin; }
       }
     </style>
   </head>
@@ -43,13 +63,16 @@
     <div class="wrap">
       <header>
         <div class="brand">
-          <div class="logo">L</div>
+          <div class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 17h5l2.5-7 5 13 2.5-6H26" fill="none" stroke="#7ee2c3" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
           <div>
             <div class="lab" id="lab-name">LabPulse</div>
-            <div class="sub">Scan to check in · LabPulse</div>
+            <div class="sub mono">Scan to check in · LabPulse</div>
           </div>
         </div>
-        <div id="conn" class="status offline">Connecting…</div>
+        <div class="right">
+          <span class="clock mono" id="clock">--:--:--</span>
+          <div id="conn" class="status offline">Connecting</div>
+        </div>
       </header>
       <main>
         <div class="qrbox">
@@ -58,25 +81,25 @@
         </div>
         <div class="side">
           <div class="stat">
-            <div class="label">Inside now</div>
+            <div class="label mono">Inside now</div>
             <div class="value" id="occ">–</div>
             <div class="sub" id="occ-pending"></div>
           </div>
           <div class="ring">
             <svg viewBox="0 0 100 100" aria-hidden="true">
-              <circle cx="50" cy="50" r="44" stroke="#1e293b"></circle>
-              <circle id="arc" cx="50" cy="50" r="44" stroke="#5eead4" stroke-linecap="round" stroke-dasharray="276.46" stroke-dashoffset="0"></circle>
+              <circle cx="50" cy="50" r="44" stroke="#24302b"></circle>
+              <circle id="arc" cx="50" cy="50" r="44" stroke="#7ee2c3" stroke-linecap="round" stroke-dasharray="276.46" stroke-dashoffset="0"></circle>
             </svg>
-            <span id="ring-text">New code in a few seconds</span>
+            <span class="ring-text" id="ring-text">New code in a few seconds</span>
           </div>
-          <ol class="steps">
-            <li>Open your phone camera</li>
-            <li>Scan the code, tap the link</li>
-            <li>Allow location, choose a reason</li>
-          </ol>
+          <dl class="spec mono">
+            <dt>01</dt><dd>Open your phone camera</dd>
+            <dt>02</dt><dd>Scan the code, tap the link</dd>
+            <dt>03</dt><dd>Allow location, choose a reason</dd>
+          </dl>
         </div>
       </main>
-      <footer>Each code works once and changes every few seconds. Photos of it will not work.</footer>
+      <footer class="mono"><span id="foot">Each code works once and changes every few seconds</span><span>Photos of it will not work</span></footer>
     </div>
     <script>
       window.BOOT = <?!= bootJson ?>;
@@ -95,6 +118,26 @@
           veil.style.display = 'grid';
         }
         function hideVeil() { veil.style.display = 'none'; }
+        /** Email-code sign-in keeps a session in this browser; staff must be signed in to show the QR. */
+        function monitorPayload() {
+          var p = { labId: BOOT.lab ? BOOT.lab.lab_id : '' };
+          try { var t = localStorage.getItem('labpulse.session'); if (t) p.__s = t; } catch (e) {}
+          return p;
+        }
+        function signInVeil(message) {
+          veil.innerHTML = '';
+          var box = document.createElement('div');
+          box.style.cssText = 'text-align:center;max-width:28rem';
+          box.textContent = message + ' ';
+          var a = document.createElement('a');
+          a.href = BOOT.webAppUrl + '?view=login';
+          a.target = '_top';
+          a.textContent = 'Log in as lab staff';
+          a.style.cssText = 'color:#5eead4;text-decoration:underline';
+          box.appendChild(a);
+          veil.appendChild(box);
+          veil.style.display = 'grid';
+        }
 
         if (BOOT.error || !BOOT.lab) {
           document.getElementById('lab-name').textContent = 'LabPulse Monitor';
@@ -127,6 +170,7 @@
               inflight = false;
               if (!r || !r.ok) {
                 setOnline(false);
+                if (r && /^(NO_IDENTITY|SESSION_EXPIRED|FORBIDDEN|NOT_REGISTERED)$/.test(r.code)) return signInVeil('The QR is shown only to lab staff.');
                 return showVeil((r && r.message) || 'Monitor error');
               }
               var d = r.data;
@@ -157,11 +201,16 @@
               inflight = false;
               setOnline(false);
             })
-            .api('monitorTick', { labId: lab.lab_id });
+            .api('monitorTick', monitorPayload());
         }
 
+        if (BOOT.lab && BOOT.lab.qr_rotate_sec) {
+          document.getElementById('foot').textContent = 'Each code works once and changes every ' + BOOT.lab.qr_rotate_sec + ' s';
+        }
+        var clockEl = document.getElementById('clock');
         function frame() {
           var now = Date.now();
+          try { clockEl.textContent = new Date(now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false }); } catch (e) {}
           // No silent attendance: if we lose the server, hide the code instead of showing a stale one.
           if (!closed && lastOk && now - lastOk > Math.max(6000, pollMs * 4)) {
             setOnline(false);

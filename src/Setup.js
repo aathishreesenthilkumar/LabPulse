@@ -2,10 +2,10 @@
  * One-time setup, run from the Apps Script editor by the deploying account.
  *
  *   1. (optional) Script Properties → BOOTSTRAP_ADMINS = comma-separated admin emails
- *   2. Run setup()          — creates the data spreadsheet, tabs, secret and first lab
+ *   2. Run setup()          — creates the data spreadsheet, tabs, secret, first lab and the
+ *                             background jobs (triggers)
  *   3. Run seedDemoData()   — optional demo catalog, courses and an all-day demo session
- *   4. Run installTriggers()
- *   5. Deploy → New deployment → Web app
+ *   4. Deploy → New deployment → Web app
  */
 
 function setup() {
@@ -41,7 +41,7 @@ function setup() {
       lab_id: 'AIIOT', name: 'Intel Unnati IoT Lab', lat: 10.9364, lng: 76.7442, radius_m: 20,
       open_time: '08:00', close_time: '20:00', open_days: 'MON,TUE,WED,THU,FRI,SAT',
       accuracy_limit_m: 30, amber_margin_m: 30, speed_flag_kmh: 25, speed_block_kmh: 200,
-      qr_rotate_sec: 8, grace_min: 15, incharge_email: '', map_cols: 8, map_rows: 5,
+      qr_rotate_sec: 30, grace_min: 15, incharge_email: '', map_cols: 8, map_rows: 5,
       active: true, updated_at: U.now()
     });
   }
@@ -63,10 +63,11 @@ function setup() {
     Auth.invalidate(email);
   });
   Crypto.migrate(); // encrypt any phone numbers stored before encryption existed
+  installTriggers_(null); // background jobs: auto-close, live presence, digests, backups (safe to repeat)
   Audit.log(null, 'SETUP', ss.getId(), 'OK', 'admins=' + admins.join(','), '');
   console.log('LabPulse data spreadsheet: ' + ss.getUrl());
   console.log('Super Admins: ' + (admins.join(', ') || 'none — set BOOTSTRAP_ADMINS and run setup() again'));
-  console.log('Next: set the real lab coordinates in Admin › Settings, then run installTriggers().');
+  console.log('Background jobs installed. Next: run seedDemoData() for sample data, then set the real lab boundary in Admin › Settings.');
   return ss.getUrl();
 }
 

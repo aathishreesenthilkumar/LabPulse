@@ -15,7 +15,7 @@ var Settings = {
     amber_margin_m: 30,
     speed_flag_kmh: 25,
     speed_block_kmh: 200,
-    qr_rotate_sec: 8,
+    qr_rotate_sec: 30,
     grace_min: 15,
     incharge_email: '',
     map_cols: 8,
@@ -72,7 +72,21 @@ var Settings = {
     lab.open_days = (U.str(o.open_days) || d.open_days).toUpperCase().replace(/\s+/g, '');
     lab.incharge_email = U.str(o.incharge_email).toLowerCase();
     lab.active = o.active === undefined || o.active === '' ? true : U.truthy(o.active);
+    lab.boundary = Settings.parseBoundary(o.boundary);
     return lab;
+  },
+
+  /** Corners of the drawn lab outline as [[lat, lng], …] (6 decimals ≈ 0.1 m); [] when none. */
+  parseBoundary: function (v) {
+    if (typeof v === 'string') {
+      try { v = v.trim() ? JSON.parse(v) : []; } catch (e) { v = []; }
+    }
+    if (!Array.isArray(v)) return [];
+    return v.map(function (p) {
+      var lat = Number(Array.isArray(p) ? p[0] : p && p.lat);
+      var lng = Number(Array.isArray(p) ? p[1] : p && p.lng);
+      return [Math.round(lat * 1e6) / 1e6, Math.round(lng * 1e6) / 1e6];
+    }).filter(function (p) { return isFinite(p[0]) && isFinite(p[1]) && Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180; }).slice(0, 40);
   },
 
   /** All labs; inactive ones only when asked for. */
@@ -150,11 +164,27 @@ var Settings = {
     if (!(lab.map_cols >= 2 && lab.map_cols <= 16 && lab.map_rows >= 2 && lab.map_rows <= 12)) {
       errs.push('Map size must be 2–16 columns and 2–12 rows.');
     }
+    if (lab.boundary.length) {
+      if (lab.boundary.length < 3) errs.push('Draw at least 3 corners for the lab boundary, or clear it to use the circle.');
+      else {
+        var poly = Geo.polygonXY(lab);
+        var far = poly.some(function (p) { return Math.sqrt(p.x * p.x + p.y * p.y) > 1000; });
+        var area = Geo.areaM2(poly);
+        if (far) errs.push('Every boundary corner must be within 1 km of the lab.');
+        else if (area < 4) errs.push('The lab boundary is too small; check the corners.');
+        else if (area > 100000) errs.push('The lab boundary is larger than 10 hectares; draw just the lab.');
+      }
+    }
     if (errs.length) fail_('INVALID', errs.join(' '));
   },
 
   saveLab: function (ctx, input) {
     var lab = Settings.normalizeLab(input || {});
+    if (lab.boundary.length >= 3) {
+      // The centre follows the drawn outline, so distances and the fallback circle stay meaningful.
+      lab.lat = Math.round(lab.boundary.reduce(function (s, p) { return s + p[0]; }, 0) / lab.boundary.length * 1e6) / 1e6;
+      lab.lng = Math.round(lab.boundary.reduce(function (s, p) { return s + p[1]; }, 0) / lab.boundary.length * 1e6) / 1e6;
+    }
     Settings.validateLab(lab);
     return withLock_(function () {
       var row = Db.byId('Config', lab.lab_id);
@@ -162,6 +192,7 @@ var Settings = {
       SHEETS.Config.forEach(function (k) {
         record[k] = lab[k];
       });
+      record.boundary = lab.boundary.length ? JSON.stringify(lab.boundary) : '';
       record.updated_at = U.now();
       if (row) Db.update('Config', row, record);
       else Db.insert('Config', record);

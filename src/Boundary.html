@@ -1,0 +1,121 @@
+<style>
+  /* ---------- Virtual boundary map (Settings editor + Live view) ---------- */
+  .lp-bnd-map { height: 340px; border: 1px solid var(--lp-line, #e6e3db); border-radius: 14px; overflow: hidden; background: #ece9e1; position: relative; z-index: 0; }
+  .lp-bnd-map.tall { height: min(62vh, 560px); }
+  .lp-bnd-msg { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 16px; font-size: 13px; color: #6b6a64; }
+  .lp-bnd-corner { width: 16px; height: 16px; border-radius: 99px; background: #fff; border: 3px solid #0e7a68; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
+  .lp-bnd-corner span { position: absolute; left: 16px; top: -6px; font: 600 11px 'Geist Mono', monospace; color: #fff; background: #0e7a68; border-radius: 6px; padding: 1px 5px; }
+  .lp-bnd-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .lp-bnd-info { font-family: 'Geist Mono', monospace; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--lp-muted, #6b6a64); }
+</style>
+<script>
+  /**
+   * LabPulse virtual boundary maps. Leaflet (cdnjs) is loaded only when a map is opened.
+   * Satellite imagery (Esri) shows the building, so the lab's corners can be clicked exactly.
+   *   LabBoundary.editor(host, {lat, lng, radius, points, onChange}) -> Promise<{undo, clear, add}>
+   *   LabBoundary.viewer(host, {lat, lng, radius_m, boundary, shape}) -> Promise
+   */
+  var LabBoundary = (function () {
+    var BASE = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/';
+    var loading = null;
+
+    function load() {
+      if (window.L) return Promise.resolve(window.L);
+      if (!loading) {
+        loading = new Promise(function (ok, fail) {
+          var css = document.createElement('link');
+          css.rel = 'stylesheet';
+          css.href = BASE + 'leaflet.min.css';
+          document.head.appendChild(css);
+          var s = document.createElement('script');
+          s.src = BASE + 'leaflet.min.js';
+          s.onload = function () { ok(window.L); };
+          s.onerror = function () { loading = null; fail(new Error('The map could not load. Check the internet connection.')); };
+          document.head.appendChild(s);
+        });
+      }
+      return loading;
+    }
+
+    function baseLayers(L, map) {
+      var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 21, maxNativeZoom: 17, attribution: 'Imagery © Esri'
+      });
+      var street = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 21, maxNativeZoom: 18, attribution: '© OpenStreetMap contributors'
+      });
+      sat.addTo(map);
+      L.control.layers({ Satellite: sat, Map: street }, null, { position: 'topright' }).addTo(map);
+    }
+
+    /** Area in m² of [[lat,lng],…] (equirectangular around the first corner). */
+    function area(points) {
+      if (points.length < 3) return 0;
+      var lat0 = points[0][0], R = 6371008.8, rad = Math.PI / 180;
+      var xy = points.map(function (p) { return { x: (p[1] - points[0][1]) * rad * R * Math.cos(lat0 * rad), y: (p[0] - lat0) * rad * R }; });
+      var s = 0;
+      for (var i = 0, j = xy.length - 1; i < xy.length; j = i++) s += (xy[j].x + xy[i].x) * (xy[j].y - xy[i].y);
+      return Math.abs(s / 2);
+    }
+
+    function fail(host, e) {
+      host.innerHTML = '<div class="lp-bnd-msg">' + String(e && e.message || e) + '</div>';
+      throw e;
+    }
+
+    function editor(host, o) {
+      return load().then(function (L) {
+        host.innerHTML = '';
+        var centre = [Number(o.lat) || 10.9364, Number(o.lng) || 76.7442];
+        var map = L.map(host, { zoomControl: true, attributionControl: true }).setView(centre, 19);
+        baseLayers(L, map);
+        var circle = L.circle(centre, { radius: Number(o.radius) || 20, color: '#121212', weight: 1.5, dashArray: '5 6', fill: false, interactive: false }).addTo(map);
+        var poly = L.polygon([], { color: '#0e7a68', weight: 2.5, fillColor: '#1f9d7a', fillOpacity: 0.18 }).addTo(map);
+        var points = (o.points || []).slice();
+        var markers = [];
+        function icon(n) { return L.divIcon({ className: '', html: '<div class="lp-bnd-corner"><span>' + n + '</span></div>', iconSize: [16, 16], iconAnchor: [8, 8] }); }
+        function redraw() {
+          markers.forEach(function (m) { map.removeLayer(m); });
+          markers = points.map(function (p, i) {
+            var m = L.marker(p, { draggable: true, icon: icon(i + 1), keyboard: false }).addTo(map);
+            m.on('drag', function (e) { points[i] = [e.latlng.lat, e.latlng.lng]; poly.setLatLngs(points); });
+            m.on('dragend', changed);
+            return m;
+          });
+          poly.setLatLngs(points);
+          circle.setStyle({ opacity: points.length >= 3 ? 0.35 : 1 });
+        }
+        function changed() {
+          if (o.onChange) o.onChange(points.map(function (p) { return [Math.round(p[0] * 1e6) / 1e6, Math.round(p[1] * 1e6) / 1e6]; }), area(points));
+        }
+        map.on('click', function (e) { points.push([e.latlng.lat, e.latlng.lng]); redraw(); changed(); });
+        redraw();
+        if (points.length >= 3) map.fitBounds(poly.getBounds(), { padding: [30, 30], maxZoom: 20 });
+        changed();
+        setTimeout(function () { map.invalidateSize(); }, 50);
+        return {
+          undo: function () { points.pop(); redraw(); changed(); },
+          clear: function () { points = []; redraw(); changed(); },
+          add: function (lat, lng) { points.push([lat, lng]); redraw(); changed(); map.panTo([lat, lng]); }
+        };
+      }, function (e) { return fail(host, e); });
+    }
+
+    function viewer(host, d) {
+      return load().then(function (L) {
+        host.innerHTML = '';
+        var centre = [d.lat, d.lng];
+        var map = L.map(host, { scrollWheelZoom: false }).setView(centre, 19);
+        baseLayers(L, map);
+        var shape = d.shape === 'polygon' && d.boundary.length >= 3
+          ? L.polygon(d.boundary, { color: '#0e7a68', weight: 2.5, fillColor: '#1f9d7a', fillOpacity: 0.2 })
+          : L.circle(centre, { radius: d.radius_m, color: '#0e7a68', weight: 2.5, fillColor: '#1f9d7a', fillOpacity: 0.15 });
+        shape.addTo(map).bindTooltip(d.name + ' · virtual boundary', { permanent: false });
+        map.fitBounds(shape.getBounds(), { padding: [40, 40], maxZoom: 20 });
+        setTimeout(function () { map.invalidateSize(); }, 50);
+      }, function (e) { return fail(host, e); });
+    }
+
+    return { editor: editor, viewer: viewer, area: area };
+  })();
+</script>

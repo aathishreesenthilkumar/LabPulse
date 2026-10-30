@@ -22,6 +22,11 @@ var VIEW_ = [R_.STAFF, R_.COORDINATOR, R_.HOD]; // oversight; HOD is read-only
 var ROUTES = {
   bootstrap: { roles: ANY_, open: true, fn: function (ctx) { return Api.bootstrap(ctx); } },
   register: { roles: ANY_, open: true, fn: function (ctx, p) { return Auth.register(ctx, p); } },
+  // Email-code sign-in: callable before anyone is identified.
+  authStart: { anon: true, fn: function (ctx, p) { return Login.start(p); } },
+  authVerify: { anon: true, fn: function (ctx, p) { return Login.verify(p); } },
+  authSignOut: { anon: true, fn: function (ctx, p, token) { return Login.signOut(token); } },
+  claimPass: { roles: ANY_, open: true, fn: function (ctx, p) { return Attendance.claimPass(ctx, p.pass); } },
 
   // Everyone
   status: { roles: ANY_, fn: function (ctx) { return Attendance.status(ctx); } },
@@ -65,6 +70,8 @@ var ROUTES = {
   staffSummary: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.summary(Settings.lab(p.labId).lab_id); } },
   activity: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.activity(Settings.lab(p.labId).lab_id); } },
   inside: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.inside(Settings.lab(p.labId).lab_id); } },
+  labBoundary: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.boundary(Settings.lab(p.labId).lab_id); } },
+  labTwin: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Monitoring.twin(Settings.lab(p.labId).lab_id); } },
   lookupStudent: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Usage.student(p.q); } },
   lookupAsset: { roles: VIEW_, configurable: true, fn: function (ctx, p) { return Usage.asset(p.assetId); } },
   inventory: { roles: VIEW_, fn: function (ctx, p) { return Assets.inventory(Settings.lab(p.labId).lab_id); } },
@@ -119,9 +126,12 @@ var Api = {
     try {
       var route = ROUTES.hasOwnProperty(action) ? ROUTES[action] : null;
       if (!route) fail_('NOT_FOUND', 'Unknown action.');
-      var ctx = Auth.context();
-      if (!route.open) Auth.require(ctx, Api.allowedRoles(action), action);
       var p = payload && typeof payload === 'object' ? payload : {};
+      var token = typeof p.__s === 'string' ? p.__s : '';
+      delete p.__s; // the session token proves identity; it is never passed on as data
+      if (route.anon) return { ok: true, data: U.plain(route.fn(null, p, token)) };
+      var ctx = Auth.context(token);
+      if (!route.open) Auth.require(ctx, Api.allowedRoles(action), action);
       return { ok: true, data: U.plain(route.fn(ctx, p)) };
     } catch (e) {
       if (e instanceof AppError) return { ok: false, code: e.code, message: e.message };
@@ -300,14 +310,17 @@ var Api = {
 function doGet(e) {
   var p = (e && e.parameter) || {};
   // Public site by default; ?view=login | signup | app open those pages directly.
-  var start = ['login', 'signup', 'app'].indexOf(p.view) !== -1 ? p.view : p.view === 'monitor' ? 'app' : 'landing';
+  // No explainer page: signed-in people land on their dashboard, everyone else on the sign-in page.
+  var start = ['login', 'signup', 'app'].indexOf(p.view) !== -1 ? p.view : 'app';
   var boot = { view: start, webAppUrl: ScriptApp.getService().getUrl() };
   var file = 'Index';
   try {
-    var ctx = Auth.context();
-    boot.init = Api.bootstrap(ctx);
+    // With email-code sign-in the page may load before we know who it is: the browser then
+    // sends its session with the first call. The QR scan is held as a short "pass" meanwhile.
+    var ctx = Auth.contextOrNull();
+    if (ctx) boot.init = Api.bootstrap(ctx);
     if (p.view === 'monitor') {
-      Auth.require(ctx, Api.allowedRoles('monitorTick'), 'monitor');
+      if (ctx) Auth.require(ctx, Api.allowedRoles('monitorTick'), 'monitor'); // otherwise each tick checks the session
       var labs = Settings.labs(false);
       if (!labs.length) fail_('NO_LAB', 'No lab is configured yet.');
       boot.view = 'monitor';
@@ -315,7 +328,8 @@ function doGet(e) {
       file = 'Monitor';
     } else if (p.t) {
       boot.view = 'checkin';
-      boot.claim = Attendance.claim(ctx, p.t);
+      if (ctx) boot.claim = Attendance.claim(ctx, p.t);
+      else boot.pass = Attendance.pass(p.t);
     }
   } catch (err) {
     boot.error = err instanceof AppError

@@ -99,6 +99,41 @@ var Monitoring = {
     };
   },
 
+  /** The lab's virtual boundary for the dashboard map (staff, coordinator, HOD, admin). */
+  boundary: function (labId) {
+    var lab = Settings.lab(labId);
+    var hasPoly = lab.boundary && lab.boundary.length >= 3;
+    return {
+      lab_id: lab.lab_id, name: lab.name, lat: lab.lat, lng: lab.lng, radius_m: lab.radius_m,
+      shape: hasPoly ? 'polygon' : 'circle', boundary: hasPoly ? lab.boundary : [],
+      area_m2: Math.round(hasPoly ? Geo.areaM2(Geo.polygonXY(lab)) : Math.PI * lab.radius_m * lab.radius_m),
+      presence: Presence.counts(lab.lab_id)
+    };
+  },
+
+  /**
+   * 3D twin of the lab: the room grid, every placed desk/item, and every person checked in,
+   * with the system they sit at and their live presence (GPS live mode). Positions come from
+   * records (the chosen system), not indoor tracking; the page animates changes between them.
+   */
+  twin: function (labId) {
+    var lab = Settings.lab(labId);
+    var assets = Assets.publicList(labId).filter(function (a) {
+      return a.map_x !== null && a.map_y !== null;
+    }).map(function (a) {
+      return { asset_id: a.asset_id, name: a.name, type: a.type, category: a.category, status: a.status, x: a.map_x, y: a.map_y };
+    });
+    var people = Monitoring.inside(labId).map(function (p) {
+      return {
+        visit_id: p.visit_id, name: p.name, reg_no: p.reg_no || p.email, system_id: p.system_id || '', system: p.system || '',
+        project: p.project || '', since: p.check_in_at, review_status: p.review_status,
+        state: p.presence ? p.presence.state : 'NOT_WATCHED',
+        state_since: p.presence ? (p.presence.state === 'OUT' ? p.presence.out_since : p.presence.last_seen) : null
+      };
+    });
+    return { lab_id: lab.lab_id, name: lab.name, cols: lab.map_cols, rows: lab.map_rows, assets: assets, people: people };
+  },
+
   /** Wall display tick: cache-only reads (§4.4 quota note). */
   monitorTick: function (labId) {
     var lab = Settings.lab(labId);

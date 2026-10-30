@@ -81,6 +81,47 @@ var Attendance = {
     });
   },
 
+  /**
+   * A QR scan by someone not signed in yet: the code is checked and used up now, and the
+   * scan is held for 10 minutes so they can sign in (email code) and then claim it.
+   * The geofence check at check-in still decides whether they are really in the lab.
+   */
+  pass: function (token) {
+    var anon = { email: '', role: '' };
+    var nowMs = U.now().getTime();
+    var v = Token.verify(token, nowMs);
+    var labId = v.parsed ? v.parsed.labId : '';
+    if (!v.ok) {
+      var expired = v.code === 'QR_EXPIRED';
+      Audit.log(anon, expired ? 'SECURITY_QR_EXPIRED' : 'SECURITY_QR_INVALID', labId, 'REJECTED', 'Before sign-in', labId);
+      return { ok: false, code: v.code, message: expired ? 'This QR code has expired. Scan the code currently shown on the lab monitor.' : 'This QR code is not valid. Scan the code shown on the lab monitor.' };
+    }
+    if (!Settings.isOpen(v.lab, new Date(nowMs))) {
+      return { ok: false, code: 'LAB_CLOSED', message: v.lab.name + ' is closed now. Opening hours: ' + v.lab.open_time + '–' + v.lab.close_time + ' (' + v.lab.open_days + ').' };
+    }
+    return withLock_(function () {
+      if (Token.isUsed(v.parsed.nonce)) {
+        Audit.log(anon, 'SECURITY_QR_REUSED', v.lab.lab_id, 'REJECTED', 'Token already used', v.lab.lab_id);
+        return { ok: false, code: 'QR_REUSED', message: 'This QR code was already used. Scan the new code on the lab monitor.' };
+      }
+      Token.markUsed(v.parsed.nonce, 'pass');
+      var id = Utilities.getUuid().replace(/-/g, '');
+      Cache.putJson('pass:' + id, { labId: v.lab.lab_id, at: nowMs }, 600);
+      return { ok: true, pass: id, labId: v.lab.lab_id, labName: v.lab.name, expiresInSec: 600 };
+    });
+  },
+
+  /** Turns a held scan into this person's check-in ticket (once). */
+  claimPass: function (ctx, id) {
+    id = U.str(id, 40);
+    var held = /^[a-f0-9]{32}$/.test(id) ? Cache.getJson('pass:' + id) : null;
+    if (!held) return { ok: false, code: 'QR_EXPIRED', message: 'Your scan has expired. Scan the code currently shown on the lab monitor.' };
+    if (ctx.user && !ctx.active) return { ok: false, code: 'INACTIVE', message: 'Your LabPulse account is disabled. Contact the lab in-charge.' };
+    Cache.remove('pass:' + id);
+    Cache.putJson('ticket:' + ctx.email, { labId: held.labId, at: U.now().getTime() }, APP.TICKET_TTL_SEC);
+    return { ok: true, labId: held.labId, labName: Settings.labName(held.labId), expiresInSec: APP.TICKET_TTL_SEC };
+  },
+
   ticket: function (email) {
     var t = Cache.getJson('ticket:' + email);
     if (!t) return null;

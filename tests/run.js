@@ -39,6 +39,11 @@ test('FR-02 registration validates fields and unique roll number', () => {
   assert.ok(ok.ok);
   assert.strictEqual(ok.data.mobile, '••••••0099', 'only a masked number leaves the server');
   assert.strictEqual(ok.data.role, 'STUDENT');
+  // No mobile number needed: name and register number complete the profile.
+  const quiet = env.as('quiet@karunya.edu.in')('register', { name: 'Quiet Person', reg_no: 'URK24CS1998' });
+  assert.ok(quiet.ok, JSON.stringify(quiet));
+  assert.strictEqual(env.as('quiet@karunya.edu.in')('bootstrap').data.me.registered, true);
+  assert.strictEqual(env.as('quiet@karunya.edu.in')('register', { name: 'Quiet Person', reg_no: 'URK24CS1998' }).code, 'ALREADY');
 });
 
 test('AT-02 valid QR inside radius gives a Green check-in and occupancy rises', () => {
@@ -513,10 +518,13 @@ test('doGet: QR link claims the scan, monitor needs staff, outsiders see a clear
   assert.strictEqual(page.boot.lab.lab_id, 'AIIOT');
   assert.ok(!('lat' in page.boot.lab));
 
+  // A browser signed in to a non-Karunya Google account just sees the public page and signs in with an email code.
   env.session.active = 'x@gmail.com';
   page = env.ctx.doGet({ parameter: {} });
-  assert.strictEqual(page.boot.error.code, 'DOMAIN');
+  assert.ok(!page.boot.error, JSON.stringify(page.boot.error));
   assert.ok(!page.boot.init);
+  // …but cannot call the app as that account.
+  assert.strictEqual(env.as('x@gmail.com')('bootstrap').code, 'DOMAIN');
 });
 
 test('Proposal: a check-in pending review cannot book equipment until confirmed', () => {
